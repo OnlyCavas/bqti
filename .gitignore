@@ -1,0 +1,12 @@
+# Rust
+/target
+
+# MacOs
+.DS_Store
+
+# Local Dev
+resources/
+
+# NixOS / nix
+result/
+*.drv
