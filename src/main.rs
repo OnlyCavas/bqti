@@ -1,10 +1,10 @@
 use bqti::bit_torrent::{
     bencode,
-    torrent::{Torrent, TorrentMode},
+    torrent::torrent::{TorrentFile, TorrentMode},
 };
 use chrono::{DateTime, Utc};
 
-fn print_torrent(torrent: Torrent, all: bool) {
+fn print_torrent(torrent: TorrentFile, all: bool) {
     let divider = "─".repeat(60);
     let thin = "·".repeat(60);
 
@@ -13,24 +13,15 @@ fn print_torrent(torrent: Torrent, all: bool) {
     println!("└{}┘", divider);
     println!();
 
-    println!("{:?}", torrent.pieces_root);
-    if let Some(merkle_root) = torrent.pieces_root {
-        println!("merkle_root {}", hex::encode(merkle_root));
-    }
-
-    match bencode::info_hash(&torrent) {
-        Ok(hash) => println!("  🔑 Info Hash    {}", hex::encode(hash)),
-        Err(e) => println!("  ✘ Hash Error    {}", e),
-    }
-
-    println!();
+    println!("  🔑 Info Hash    {}", hex::encode(torrent.info_hash()));
     println!("  {}", thin);
 
-    if let Some(ref announce) = torrent.announce {
+    if let Some(announce) = torrent.announce() {
         println!("  📡 Announce     {}", announce);
+        println!("");
     }
 
-    if let Some(ref announce_list) = torrent.announce_list {
+    if let Some(announce_list) = torrent.announce_list() {
         println!("  📡 Trackers");
         for (i, tier) in announce_list.iter().enumerate() {
             println!("     Tier {}", i + 1);
@@ -40,45 +31,43 @@ fn print_torrent(torrent: Torrent, all: bool) {
         }
     }
 
-    if let Some(url_list) = torrent.web_seeds() {
+    if let Some(web_seeds) = torrent.web_seeds() {
         println!("  🌐 Web Seeds");
-        for url in url_list {
+        for url in web_seeds {
             println!("       ↳ {}", url);
         }
     }
 
     println!();
     println!("  {}", thin);
-    println!("  📦 Name         {}", torrent.info.name);
-    println!(
-        "  🧩 Piece Length {}",
-        format_size(torrent.info.piece_length())
-    );
+    println!("  📦 Name         {}", torrent.name());
+    println!("  🧩 Piece Length {}", format_size(torrent.piece_length()));
 
-    if let Some(mode) = torrent.info.mode() {
-        match &mode {
-            TorrentMode::SingleFile { .. } => {
-                println!("  📄 Mode         Single File");
-            }
-            TorrentMode::MultiFile { files } => {
-                println!("  📁 Mode         Multi File ({} files)", files.len());
-                for file in files {
-                    println!(
-                        "       ↳ {} — {}",
-                        file.path.join("/"),
-                        format_size(file.length)
-                    );
-                }
+    match torrent.mode() {
+        TorrentMode::SingleFile { .. } => {
+            println!("  📄 Mode         Single File");
+        }
+        TorrentMode::MultiFile { files } => {
+            println!("  📁 Mode         Multi File ({} files)", files.len());
+            for file in files {
+                println!(
+                    "       ↳ {} — {}",
+                    file.path.join("/"),
+                    format_size(file.length)
+                );
             }
         }
-
-        println!(
-            "  💾 Total Size   {}",
-            format_size(torrent.info.total_size().unwrap_or_default())
-        );
     }
 
-    if let Ok(hashes) = torrent.info.piece_hashes() {
+    println!(
+        "  💾 Total Size   {}",
+        format_size(torrent.total_size().unwrap_or_default())
+    );
+
+    println!();
+    println!("  {}", thin);
+
+    if let Ok(hashes) = torrent.piece_hashes() {
         println!("  🔢 Pieces       {}", hashes.len());
 
         if all {
@@ -93,16 +82,17 @@ fn print_torrent(torrent: Torrent, all: bool) {
 
     println!();
     println!("  {}", thin);
+    println!("  💬 Version      {:?}", torrent.version());
 
-    if let Some(comment) = torrent.comment {
+    if let Some(comment) = torrent.comment() {
         println!("  💬 Comment      {}", comment);
     }
 
-    if let Some(created_by) = torrent.created_by {
+    if let Some(created_by) = torrent.created_by() {
         println!("  🛠  Created By   {}", created_by);
     }
 
-    if let Some(creation_date) = torrent.creation_date {
+    if let Some(creation_date) = torrent.creation_date() {
         let dt = DateTime::<Utc>::from_timestamp(creation_date, 0)
             .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_else(|| creation_date.to_string());

@@ -38,6 +38,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            transmission_4
           ];
 
           shellHook = "";

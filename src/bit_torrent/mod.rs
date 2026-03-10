@@ -6,4 +6,5 @@ pub mod torrent;
 type ByteSize = i64;
 type PieceByte = ByteBuf;
 type Hash2OBytes = [u8; 20];
+type MerkleRoot = [u8; 32];
 type EncodedBytes = Vec<u8>;
