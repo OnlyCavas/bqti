@@ -1,7 +1,7 @@
 use crate::bit_torrent::torrent::{
     builder::TorrentBuilder,
     codec::{Metadata, decode, encode},
-    torrent::TorrentFile,
+    metainfo::TorrentFile,
 };
 
 mod error;
@@ -17,7 +17,7 @@ pub fn load(path: &str) -> Result<TorrentFile, BitTorrentError> {
 }
 
 pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
-    let metadata: Metadata = Metadata::from(torrent);
+    let metadata: Metadata = Metadata::from_metainfo(torrent);
     let bytes = encode(&metadata).map_err(BitTorrentError::Codec)?;
 
     std::fs::write(path, bytes)?;

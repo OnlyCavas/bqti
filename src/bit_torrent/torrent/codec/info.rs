@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bit_torrent::{
-    torrent::torrent::EmbededFile,
+    torrent::metainfo::EmbededFile,
     types::{ByteSize, PieceByte},
 };
 
@@ -99,12 +99,22 @@ pub struct FileInfo {
     pub md5sum: Option<String>, // file md5 sum
 }
 
+impl From<EmbededFile> for FileInfo {
+    fn from(value: EmbededFile) -> Self {
+        FileInfo {
+            length: value.length,
+            path: value.path,
+            md5sum: value.md5sum,
+        }
+    }
+}
+
 impl From<FileInfo> for EmbededFile {
-    fn from(f: FileInfo) -> Self {
+    fn from(value: FileInfo) -> Self {
         EmbededFile {
-            length: f.length,
-            path: f.path,
-            md5sum: f.md5sum,
+            length: value.length,
+            path: value.path,
+            md5sum: value.md5sum,
         }
     }
 }

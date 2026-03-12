@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use crate::{BQTIError, BitTorrentError, bit_torrent::torrent::validator, load, utils};
+use crate::{
+    BQTIError, BitTorrentError, bit_torrent::torrent::metainfo::TorrentIntegrity, load, utils,
+};
 
 pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<(), BQTIError> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
@@ -13,18 +15,13 @@ pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<(), BQTIError> {
 
 pub fn validate(torrent: PathBuf) -> Result<(), BQTIError> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
+    let torrent = load(&torrent_path)?;
 
-    let validate_torrent = match load(&torrent_path) {
-        Ok(torrent) => validator::validate(&torrent)
-            .map_err(|e| BQTIError::BitTorrent(BitTorrentError::Torrent(e))),
-        Err(e) => panic!("{0}", e.to_string()),
-    };
-
-    match validate_torrent {
+    match torrent.validate() {
         Ok(_) => {
-            println!("torrent is valid");
+            println!(".torrent metadata file is valid!");
             Ok(())
         }
-        Err(e) => Err(e),
+        Err(e) => Err(BQTIError::BitTorrent(BitTorrentError::Torrent(e))),
     }
 }

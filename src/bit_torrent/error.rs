@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::bit_torrent::torrent::{codec::BencodeError, torrent::TorrentError};
+use crate::bit_torrent::torrent::{codec::BencodeError, metainfo::TorrentError};
 
 #[derive(Error, Debug)]
 pub enum BitTorrentError {

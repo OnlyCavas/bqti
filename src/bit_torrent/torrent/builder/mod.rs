@@ -5,7 +5,7 @@ pub use v1_builder::V1Builder;
 use crate::{
     bit_torrent::torrent::{
         codec::{Metadata, MetadataMode},
-        torrent::{TorrentError, TorrentFile},
+        metainfo::{TorrentError, TorrentFile},
     },
     types::{ByteSize, PieceByte},
 };
@@ -45,7 +45,7 @@ impl TorrentBuilder {
             return Err(TorrentError::UnsupportedVersion(1));
         };
 
-        let mut builder = V1Builder::new(
+        let mut builder = TorrentBuilder::with_v1(
             metadata.info.name,
             metadata.info.piece_length,
             metadata.info.pieces,

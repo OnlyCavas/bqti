@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 
-use crate::bit_torrent::torrent::torrent::{TorrentFile, TorrentMode};
+use crate::bit_torrent::torrent::metainfo::Metainfo;
 
-pub fn print_torrent(torrent: &TorrentFile, all: bool) {
+pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
     let divider = "─".repeat(60);
     let thin = "·".repeat(60);
 
@@ -41,40 +41,37 @@ pub fn print_torrent(torrent: &TorrentFile, all: bool) {
     println!("  📦 Name         {}", torrent.name());
     println!("  🧩 Piece Length {}", format_size(torrent.piece_length()));
 
-    match torrent.mode() {
-        TorrentMode::SingleFile { .. } => {
-            println!("  📄 Mode         Single File");
-        }
-        TorrentMode::MultiFile { files } => {
+    let files = torrent.files();
+    match files.len() {
+        0 => println!("  📄 Mode        Error No File Found"),
+
+        1 => println!("  📄 Mode         Single File"),
+        _ => {
             println!("  📁 Mode         Multi File ({} files)", files.len());
             for file in files {
                 println!(
                     "       ↳ {} — {}",
                     file.path.join("/"),
-                    format_size(file.length)
+                    format_size(file.length as u64)
                 );
             }
         }
     }
 
-    println!(
-        "  💾 Total Size   {}",
-        format_size(torrent.total_size().unwrap_or_default())
-    );
+    println!("  💾 Total Size   {}", format_size(torrent.total_size()));
 
     println!();
     println!("  {}", thin);
 
-    if let Ok(hashes) = torrent.hashes() {
-        println!("  🔢 Pieces       {}", hashes.len());
+    let hashes = torrent.piece_hashes();
+    println!("  🔢 Pieces       {}", hashes.len());
 
-        if all {
-            println!();
-            println!("  {}", thin);
-            println!("  🔍 Piece Hashes");
-            for (i, hash) in hashes.iter().enumerate() {
-                println!("     [{:>6}] {}", i, hex::encode(hash));
-            }
+    if all {
+        println!();
+        println!("  {}", thin);
+        println!("  🔍 Piece Hashes");
+        for (i, hash) in hashes.iter().enumerate() {
+            println!("     [{:>6}] {}", i, hex::encode(hash));
         }
     }
 
@@ -91,7 +88,7 @@ pub fn print_torrent(torrent: &TorrentFile, all: bool) {
     }
 
     if let Some(creation_date) = torrent.creation_date() {
-        let dt = DateTime::<Utc>::from_timestamp(creation_date, 0)
+        let dt = DateTime::<Utc>::from_timestamp(creation_date as i64, 0)
             .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_else(|| creation_date.to_string());
 
@@ -102,11 +99,15 @@ pub fn print_torrent(torrent: &TorrentFile, all: bool) {
     println!("  {}", "─".repeat(60));
 }
 
-pub fn format_size(bytes: i64) -> String {
-    match bytes {
-        b if b >= 1024 * 1024 * 1024 => format!("{:.2} GB", b as f64 / (1024.0 * 1024.0 * 1024.0)),
-        b if b >= 1024 * 1024 => format!("{:.2} MB", b as f64 / (1024.0 * 1024.0)),
-        b if b >= 1024 => format!("{:.2} KB", b as f64 / 1024.0),
-        b => format!("{} B", b),
+pub fn format_size(bytes: u64) -> String {
+    let bytes_f = bytes as f64;
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.2} GB", bytes_f / 1073741824.0)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.2} MB", bytes_f / 1048576.0)
+    } else if bytes >= 1024 {
+        format!("{:.2} KB", bytes_f / 1024.0)
+    } else {
+        format!("{} B", bytes)
     }
 }

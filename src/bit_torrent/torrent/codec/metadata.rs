@@ -6,7 +6,7 @@ use serde_bencode::value::Value;
 use crate::bit_torrent::{
     torrent::{
         codec::{MetadataInfo, info::FileInfo},
-        torrent::{TorrentFile, V1Mode},
+        metainfo::Metainfo,
     },
     types::{MerkleRoot, PieceByte, UnixDate},
 };
@@ -43,6 +43,50 @@ impl Metadata {
         self.extra.get(id)
     }
 
+    pub fn from_metainfo(metainfo: &impl Metainfo) -> Metadata {
+        Metadata {
+            announce: metainfo.announce().map(|s| s.to_string()),
+            info: Metadata::from_info(metainfo),
+            announce_list: metainfo.announce_list().map(|l| l.to_vec()),
+            creation_date: metainfo.creation_date(),
+            comment: metainfo.comment().map(|s| s.to_string()),
+            created_by: metainfo.created_by().map(|s| s.to_string()),
+            url_list: metainfo.web_seeds().map(|l| l.to_vec()),
+            extra: HashMap::new(),
+            piece_layers: HashMap::new(),
+        }
+    }
+
+    fn from_info(metainfo: &impl Metainfo) -> MetadataInfo {
+        let all_files = metainfo.files();
+
+        let (length, files) = if all_files.len() == 1 {
+            (Some(all_files[0].length as i64), None)
+        } else {
+            let converted = all_files
+                .into_iter()
+                .map(FileInfo::from)
+                .collect::<Vec<FileInfo>>();
+
+            (None, Some(converted))
+        };
+        MetadataInfo {
+            name: metainfo.name().to_string(),
+            version: Some(metainfo.version()),
+            piece_length: metainfo.piece_length() as i64,
+            private: if metainfo.is_private() {
+                Some(1)
+            } else {
+                Some(0)
+            },
+            length,
+            files,
+            file_tree: None,
+            pieces: serde_bytes::ByteBuf::from(metainfo.raw_pieces().to_vec()),
+            md5sum: None,
+        }
+    }
+
     pub fn web_seeds(&self) -> Option<Vec<String>> {
         let Some(mut seeds) = self.url_list.clone() else {
             return None;
@@ -67,58 +111,5 @@ impl Metadata {
         }
 
         Some(seeds)
-    }
-}
-
-fn from_info(value: &TorrentFile) -> MetadataInfo {
-    let version = value.version().parse::<u8>().unwrap_or(0);
-
-    match value {
-        TorrentFile::V1(v1) => {
-            let (length, md5sum, files) = match &v1.mode {
-                V1Mode::SingleFile { length, md5sum } => (Some(*length), md5sum.clone(), None),
-                V1Mode::MultiFile { files } => {
-                    let entries = files
-                        .iter()
-                        .map(|f| FileInfo {
-                            length: f.length,
-                            path: f.path.clone(),
-                            md5sum: f.md5sum.clone(),
-                        })
-                        .collect();
-
-                    (None, None, Some(entries))
-                }
-            };
-
-            MetadataInfo {
-                name: value.name(),
-                version: Some(version),
-                file_tree: None,
-                private: v1.private.then_some(1u8),
-                pieces: v1.pieces.clone(),
-                piece_length: value.piece_length(),
-                length,
-                md5sum,
-                files,
-            }
-        }
-        TorrentFile::V2(_v2) => todo!(),
-    }
-}
-
-impl From<&TorrentFile> for Metadata {
-    fn from(value: &TorrentFile) -> Self {
-        Metadata {
-            announce: value.announce(),
-            info: from_info(value),
-            announce_list: value.announce_list(),
-            creation_date: value.creation_date(),
-            comment: value.comment(),
-            created_by: value.created_by(),
-            url_list: value.web_seeds(),
-            extra: HashMap::new(),
-            piece_layers: HashMap::new(), // v2
-        }
     }
 }

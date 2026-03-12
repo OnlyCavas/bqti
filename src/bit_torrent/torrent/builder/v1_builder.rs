@@ -1,11 +1,17 @@
 use sha1::{Digest, Sha1};
 
-use crate::bit_torrent::{
-    torrent::{
-        codec::{self, MetadataInfo, MetadataMode},
-        torrent::{EmbededFile, TorrentError, TorrentFile, TorrentV1, V1Mode},
+use crate::{
+    bit_torrent::{
+        torrent::{
+            codec::{self, MetadataInfo, MetadataMode},
+            metainfo::{
+                EmbededFile, InfoHash, TorrentCommon, TorrentError, TorrentFile, V1Mode,
+                v1::TorrentV1,
+            },
+        },
+        types::{ByteSize, Hash2OBytes, PieceByte},
     },
-    types::{ByteSize, Hash2OBytes, PieceByte},
+    types::UnixDate,
 };
 
 pub struct V1Builder {
@@ -17,7 +23,7 @@ pub struct V1Builder {
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
     web_seeds: Option<Vec<String>>,
-    creation_date: Option<ByteSize>,
+    creation_date: Option<u64>,
     comment: Option<String>,
     created_by: Option<String>,
 }
@@ -82,7 +88,7 @@ impl V1Builder {
         self
     }
 
-    pub fn creation_date(mut self, unix_timestamp: i64) -> Self {
+    pub fn creation_date(mut self, unix_timestamp: UnixDate) -> Self {
         self.creation_date = Some(unix_timestamp);
         self
     }
@@ -126,18 +132,20 @@ impl V1Builder {
         };
 
         Ok(TorrentFile::V1(TorrentV1::new(
-            info_hash,
-            self.name,
-            self.announce,
-            self.announce_list,
-            self.web_seeds,
-            self.piece_length,
+            TorrentCommon::new(
+                InfoHash::V1(info_hash),
+                self.name,
+                self.announce,
+                self.announce_list,
+                self.piece_length,
+                self.creation_date,
+                self.comment,
+                self.created_by,
+                self.web_seeds,
+            ),
             self.private,
             self.pieces,
             mode,
-            self.creation_date,
-            self.comment,
-            self.created_by,
         )))
     }
 }

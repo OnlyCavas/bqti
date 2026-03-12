@@ -1,6 +1,6 @@
 use serde_bytes::ByteBuf;
 
-pub type UnixDate = i64;
+pub type UnixDate = u64;
 
 pub type ByteSize = i64;
 pub type PieceByte = ByteBuf;
