@@ -1,13 +1,29 @@
-use serde_bytes::ByteBuf;
+use crate::{
+    bit_torrent::{
+        error::BitTorrentError,
+        torrent::{builder::TorrentBuilder, codec::decode, torrent::TorrentFile},
+    },
+    torrent::codec::{Metadata, encode},
+};
 
-pub mod bencode;
+mod error;
+
 pub mod torrent;
+pub mod types;
 
-type ByteSize = i64;
-type PieceByte = ByteBuf;
+pub fn load(path: &str) -> Result<TorrentFile, BitTorrentError> {
+    let bytes = std::fs::read(path).map_err(BitTorrentError::Io)?;
+    let info: Metadata = decode(bytes).map_err(BitTorrentError::Codec)?;
+    let torrent = TorrentBuilder::apply_from_metadata(info).map_err(BitTorrentError::Torrent)?;
 
-type Hash2OBytes = [u8; 20];
-type Hash32Bytes = [u8; 32];
-type MerkleRoot = Hash32Bytes;
+    Ok(torrent)
+}
 
-type EncodedBytes = Vec<u8>;
+pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
+    let metadata: Metadata = Metadata::from(torrent);
+    let bytes = encode(&metadata).map_err(BitTorrentError::Codec)?;
+
+    std::fs::write(path, bytes)?;
+
+    Ok(())
+}

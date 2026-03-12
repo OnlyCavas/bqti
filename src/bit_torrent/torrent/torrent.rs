@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::bit_torrent::{ByteSize, Hash2OBytes, Hash32Bytes, MerkleRoot, PieceByte};
+use crate::bit_torrent::types::{ByteSize, Hash2OBytes, Hash32Bytes, MerkleRoot, PieceByte};
 
 #[derive(Error, Debug)]
 pub enum TorrentError {
     #[error("piece hash doesn't have 20 bytes")]
     Hash20Error(),
+
+    #[error("failed: {0}")]
+    Failed(String),
 
     #[error("unsupported version, {0}")]
     UnsupportedVersion(u8),

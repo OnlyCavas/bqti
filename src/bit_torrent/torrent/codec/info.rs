@@ -1,71 +1,11 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_bencode::value::Value;
 
-use crate::bit_torrent::{ByteSize, MerkleRoot, PieceByte, torrent::torrent::EmbededFile};
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Metadata {
-    pub announce: Option<String>, // sigle or main tracker both v1 and v2
-
-    // 0052
-    pub info: MetadataInfo, // torrent info, both v1 and v2
-
-    #[serde(rename = "announce-list", default)]
-    pub announce_list: Option<Vec<Vec<String>>>, // fallback tracker list, v1 optional
-
-    #[serde(rename = "creation date", default)]
-    pub creation_date: Option<ByteSize>, // created at, v1 but compatible
-
-    #[serde(default)]
-    pub comment: Option<String>, // comment, v1 but compatible
-
-    #[serde(rename = "created by", default)]
-    pub created_by: Option<String>, // created by, v1 but compatible
-
-    #[serde(rename = "url-list")]
-    url_list: Option<Vec<String>>, // BEP 19 (GetRight), fallback and compatible
-
-    #[serde(flatten)]
-    extra: HashMap<String, serde_bencode::value::Value>,
-
-    // the key is the merkle root and value are n * 32
-    #[serde(rename = "piece layers", default)]
-    pub piece_layers: HashMap<MerkleRoot, PieceByte>, // only on v2
-}
-
-impl Metadata {
-    fn extra_value(&self, id: &str) -> Option<&serde_bencode::value::Value> {
-        self.extra.get(id)
-    }
-
-    pub fn web_seeds(&self) -> Option<Vec<String>> {
-        let Some(mut seeds) = self.url_list.clone() else {
-            return None;
-        };
-
-        if seeds.is_empty() {
-            return None;
-        }
-
-        let Some(Value::List(httpseed)) = self.extra_value("httpseeds") else {
-            return Some(seeds);
-        };
-
-        for seed in httpseed {
-            let Value::Bytes(item) = seed else {
-                continue;
-            };
-
-            if let Ok(url) = String::from_utf8(item.clone()) {
-                seeds.push(url);
-            }
-        }
-
-        Some(seeds)
-    }
-}
+use crate::bit_torrent::{
+    torrent::torrent::EmbededFile,
+    types::{ByteSize, PieceByte},
+};
 
 #[derive(Debug, Clone)]
 pub enum MetadataMode {
@@ -83,22 +23,22 @@ pub struct MetadataInfo {
     pub name: String, // file name
 
     #[serde(rename = "meta version", default)] // some versions
-    version: Option<u8>, // only v2
+    pub(crate) version: Option<u8>, // only v2
 
     #[serde(rename = "file tree", default)]
     pub file_tree: Option<HashMap<String, MetadataFileTreeEntry>>,
 
     #[serde(rename = "private", default)] // some versions
-    private: Option<u8>, //only v1 must not use PEX or DHT
+    pub(crate) private: Option<u8>, //only v1 must not use PEX or DHT
 
     pub pieces: PieceByte, // chunk old version
 
     #[serde(rename = "piece length")]
     pub piece_length: ByteSize, // each piece length
 
-    length: Option<ByteSize>,     // single file
-    md5sum: Option<String>,       // single file
-    files: Option<Vec<FileInfo>>, // multiple embeded files
+    pub(crate) length: Option<ByteSize>,     // single file
+    pub(crate) md5sum: Option<String>,       // single file
+    pub(crate) files: Option<Vec<FileInfo>>, // multiple embeded files
 }
 
 impl MetadataInfo {

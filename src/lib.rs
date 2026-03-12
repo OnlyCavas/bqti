@@ -1,1 +1,3 @@
-pub mod bit_torrent;
+mod bit_torrent;
+
+pub use bit_torrent::*;

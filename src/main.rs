@@ -1,10 +1,10 @@
-use bqti::bit_torrent::{
-    bencode,
+use bqti::{
+    load, save,
     torrent::torrent::{TorrentFile, TorrentMode},
 };
 use chrono::{DateTime, Utc};
 
-fn print_torrent(torrent: TorrentFile, all: bool) {
+fn print_torrent(torrent: &TorrentFile, all: bool) {
     let divider = "─".repeat(60);
     let thin = "·".repeat(60);
 
@@ -118,8 +118,14 @@ fn main() {
         panic!("Is missing an argument")
     };
 
-    match bencode::decode(&path) {
-        Ok(torrent) => print_torrent(torrent, false),
+    let loaded_torrent = match load(&path) {
+        Ok(torrent) => torrent,
         Err(e) => panic!("{0}", e.to_string()),
+    };
+
+    print_torrent(&loaded_torrent, false);
+    match save("resources/mine.torrent", &loaded_torrent) {
+        Ok(_) => println!("Done!"),
+        Err(e) => panic!("Error: {}", e.to_string()),
     }
 }

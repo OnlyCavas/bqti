@@ -1,3 +1,3 @@
 pub mod builder;
-pub mod reader;
+pub mod codec;
 pub mod torrent;
