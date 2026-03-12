@@ -13,3 +13,4 @@ hex = "0.4.3"
 chrono = "0.4.44"
 strum = { version = "0.27", features = ["derive"] }
 either = "1.15.0"
+clap = { version = "4", features = ["derive"] }

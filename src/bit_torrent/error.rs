@@ -10,6 +10,9 @@ pub enum BitTorrentError {
     #[error("codec error: {0}")]
     Codec(#[from] BencodeError),
 
+    #[error("path invalid or not found")]
+    InvalidPath(),
+
     #[error("torrent error: {0}")]
     Torrent(#[from] TorrentError),
 }

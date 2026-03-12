@@ -1,14 +1,11 @@
 use sha1::{Digest, Sha1};
 
-use crate::{
-    bit_torrent::{
-        torrent::{
-            codec::MetadataMode,
-            torrent::{EmbededFile, TorrentError, TorrentFile, TorrentV1, V1Mode},
-        },
-        types::{ByteSize, Hash2OBytes, PieceByte},
+use crate::bit_torrent::{
+    torrent::{
+        codec::{self, MetadataInfo, MetadataMode},
+        torrent::{EmbededFile, TorrentError, TorrentFile, TorrentV1, V1Mode},
     },
-    torrent::codec::{self, MetadataInfo},
+    types::{ByteSize, Hash2OBytes, PieceByte},
 };
 
 pub struct V1Builder {

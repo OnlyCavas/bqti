@@ -12,6 +12,9 @@ pub enum TorrentError {
     #[error("failed: {0}")]
     Failed(String),
 
+    #[error("validation failed: {0}")]
+    NotValid(String),
+
     #[error("unsupported version, {0}")]
     UnsupportedVersion(u8),
 
@@ -83,15 +86,9 @@ impl TorrentFile {
         self.common().created_by.clone()
     }
 
-    pub fn piece_hashes(&self) -> Result<Vec<Hash2OBytes>, TorrentError> {
+    pub fn hashes(&self) -> Result<Vec<Hash2OBytes>, TorrentError> {
         match self {
-            TorrentFile::V1(v1) => v1
-                .pieces
-                .chunks(20)
-                .map(|c| -> Result<Hash2OBytes, TorrentError> {
-                    c.try_into().map_err(|_| TorrentError::Hash20Error())
-                })
-                .collect(),
+            TorrentFile::V1(v1) => v1.hashes(),
             TorrentFile::V2(_) => todo!(),
         }
     }
@@ -117,7 +114,7 @@ impl TorrentFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InfoHash {
     V1(Hash2OBytes),
     V2(Hash32Bytes),
@@ -132,24 +129,24 @@ impl AsRef<[u8]> for InfoHash {
     }
 }
 
-#[derive(Debug)]
-struct TorrentCommon {
-    info_hash: InfoHash,
-    name: String,
-    announce: Option<String>,
-    announce_list: Option<Vec<Vec<String>>>,
-    web_seeds: Option<Vec<String>>,
-    piece_length: ByteSize,          // each piece length
-    creation_date: Option<ByteSize>, // created at, v1 but compatible
-    comment: Option<String>,         // comment, v1 but compatible
-    created_by: Option<String>,      // created by, v1 but compatible
+#[derive(Debug, Clone)]
+pub(crate) struct TorrentCommon {
+    pub(crate) info_hash: InfoHash,
+    pub(crate) name: String,
+    pub(crate) announce: Option<String>,
+    pub(crate) announce_list: Option<Vec<Vec<String>>>,
+    pub(crate) web_seeds: Option<Vec<String>>,
+    pub(crate) piece_length: ByteSize,          // each piece length
+    pub(crate) creation_date: Option<ByteSize>, // created at, v1 but compatible
+    pub(crate) comment: Option<String>,         // comment, v1 but compatible
+    pub(crate) created_by: Option<String>,      // created by, v1 but compatible
 }
 
 // Metafile Torrent V1
 
 #[derive(Debug)]
 pub struct TorrentV1 {
-    info: TorrentCommon,
+    pub(crate) info: TorrentCommon,
     pub private: bool,     //only v1 must not use PEX or DHT convert to bool
     pub pieces: PieceByte, // chunk old version
     pub mode: V1Mode,
@@ -186,6 +183,13 @@ impl TorrentV1 {
             pieces,
             mode,
         }
+    }
+
+    pub fn hashes(&self) -> Result<Vec<Hash2OBytes>, TorrentError> {
+        self.pieces
+            .chunks_exact(20)
+            .map(|c| c.try_into().map_err(|_| TorrentError::Hash20Error()))
+            .collect()
     }
 }
 

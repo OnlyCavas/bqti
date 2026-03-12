@@ -1,8 +1,8 @@
 use thiserror::Error;
 
-use crate::{
-    bit_torrent::{torrent::codec::Metadata, types::EncodedBytes},
-    torrent::codec::MetadataInfo,
+use crate::bit_torrent::{
+    torrent::codec::{Metadata, MetadataInfo},
+    types::EncodedBytes,
 };
 
 #[derive(Error, Debug)]

@@ -3,15 +3,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value;
 
-use crate::{
-    bit_torrent::{
-        torrent::codec::MetadataInfo,
-        types::{MerkleRoot, PieceByte, UnixDate},
-    },
+use crate::bit_torrent::{
     torrent::{
-        codec::info::FileInfo,
+        codec::{MetadataInfo, info::FileInfo},
         torrent::{TorrentFile, V1Mode},
     },
+    types::{MerkleRoot, PieceByte, UnixDate},
 };
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

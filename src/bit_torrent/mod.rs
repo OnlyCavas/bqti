@@ -1,13 +1,10 @@
-use crate::{
-    bit_torrent::{
-        error::BitTorrentError,
-        torrent::{builder::TorrentBuilder, codec::decode, torrent::TorrentFile},
-    },
-    torrent::codec::{Metadata, encode},
+use crate::bit_torrent::torrent::{
+    builder::TorrentBuilder,
+    codec::{Metadata, decode, encode},
+    torrent::TorrentFile,
 };
 
 mod error;
-
 pub mod torrent;
 pub mod types;
 
@@ -27,3 +24,5 @@ pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
 
     Ok(())
 }
+
+pub use error::BitTorrentError;

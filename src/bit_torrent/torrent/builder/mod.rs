@@ -3,7 +3,7 @@ mod v1_builder;
 pub use v1_builder::V1Builder;
 
 use crate::{
-    torrent::{
+    bit_torrent::torrent::{
         codec::{Metadata, MetadataMode},
         torrent::{TorrentError, TorrentFile},
     },
