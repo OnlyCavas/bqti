@@ -67,6 +67,7 @@ impl Metadata {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum MetadataMode {
     SingleFile {
         length: ByteSize,
@@ -85,7 +86,7 @@ pub struct MetadataInfo {
     version: Option<u8>, // only v2
 
     #[serde(rename = "file tree", default)]
-    file_tree: Option<HashMap<String, FileTreeNode>>,
+    pub file_tree: Option<HashMap<String, MetadataFileTreeEntry>>,
 
     #[serde(rename = "private", default)] // some versions
     private: Option<u8>, //only v1 must not use PEX or DHT
@@ -101,6 +102,31 @@ pub struct MetadataInfo {
 }
 
 impl MetadataInfo {
+    pub fn v1(
+        name: String,
+        private: Option<u8>,
+        pieces: PieceByte,
+        piece_length: ByteSize,
+        mode: MetadataMode,
+    ) -> Self {
+        let (length, md5sum, files) = match mode {
+            MetadataMode::SingleFile { length, md5sum } => (Some(length), md5sum, None),
+            MetadataMode::MultiFile { files } => (None, None, Some(files)),
+        };
+
+        Self {
+            name,
+            version: None,
+            file_tree: None,
+            private,
+            pieces,
+            piece_length,
+            length,
+            md5sum,
+            files,
+        }
+    }
+
     pub fn is_private(&self) -> bool {
         self.private.is_some_and(|v| v != 0)
     }
@@ -144,7 +170,7 @@ impl From<FileInfo> for EmbededFile {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct FileTreeEntry {
+pub struct MetadataFileTreeEntry {
     pub length: i64,
     #[serde(rename = "pieces root", default)]
     pub pieces_root: Option<[u8; 32]>,
@@ -152,10 +178,10 @@ pub struct FileTreeEntry {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
-pub enum FileTreeNode {
+pub enum MetadataFileTreeNode {
     File {
         #[serde(rename = "")]
-        entry: FileTreeEntry,
+        entry: MetadataFileTreeEntry,
     },
-    Dir(HashMap<String, FileTreeNode>),
+    Dir(HashMap<String, MetadataFileTreeNode>),
 }

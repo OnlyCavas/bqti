@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use thiserror::Error;
 
-use crate::bit_torrent::{ByteSize, Hash2OBytes, PieceByte};
+use crate::bit_torrent::{ByteSize, Hash2OBytes, Hash32Bytes, MerkleRoot, PieceByte};
 
 #[derive(Error, Debug)]
 pub enum TorrentError {
@@ -9,9 +11,10 @@ pub enum TorrentError {
 
     #[error("unsupported version, {0}")]
     UnsupportedVersion(u8),
-}
 
-// Metafile Torrent V1
+    #[error("unsupported, {0}")]
+    Unsupported(String),
+}
 
 pub enum TorrentMode<'a> {
     SingleFile {
@@ -26,13 +29,19 @@ pub enum TorrentMode<'a> {
 #[derive(Debug, strum::Display)]
 pub enum TorrentFile {
     V1(TorrentV1),
+    V2(TorrentV2),
 }
 
 impl TorrentFile {
-    pub fn name(&self) -> String {
+    fn common(&self) -> &TorrentCommon {
         match self {
-            TorrentFile::V1(v1) => v1.name.clone(),
+            TorrentFile::V1(torrent_v1) => &torrent_v1.info,
+            TorrentFile::V2(torrent_v2) => &torrent_v2.info,
         }
+    }
+
+    pub fn name(&self) -> String {
+        self.common().name.clone()
     }
 
     pub fn version(&self) -> String {
@@ -40,51 +49,35 @@ impl TorrentFile {
     }
 
     pub fn announce(&self) -> Option<String> {
-        match self {
-            TorrentFile::V1(v1) => v1.announce.clone(),
-        }
+        self.common().announce.clone()
     }
 
     pub fn announce_list(&self) -> Option<Vec<Vec<String>>> {
-        match self {
-            TorrentFile::V1(v1) => v1.announce_list.clone(),
-        }
+        self.common().announce_list.clone()
     }
 
     pub fn info_hash(&self) -> &[u8] {
-        match self {
-            TorrentFile::V1(v1) => v1.info_hash.as_ref(),
-        }
+        self.common().info_hash.as_ref()
     }
 
     pub fn web_seeds(&self) -> Option<Vec<String>> {
-        match self {
-            TorrentFile::V1(v1) => v1.web_seeds.clone(),
-        }
+        self.common().web_seeds.clone()
     }
 
     pub fn piece_length(&self) -> ByteSize {
-        match self {
-            TorrentFile::V1(v1) => v1.piece_length,
-        }
+        self.common().piece_length
     }
 
     pub fn creation_date(&self) -> Option<ByteSize> {
-        match self {
-            TorrentFile::V1(v1) => v1.creation_date,
-        }
+        self.common().creation_date
     }
 
     pub fn comment(&self) -> Option<String> {
-        match self {
-            TorrentFile::V1(v1) => v1.comment.clone(),
-        }
+        self.common().comment.clone()
     }
 
     pub fn created_by(&self) -> Option<String> {
-        match self {
-            TorrentFile::V1(v1) => v1.created_by.clone(),
-        }
+        self.common().created_by.clone()
     }
 
     pub fn piece_hashes(&self) -> Result<Vec<Hash2OBytes>, TorrentError> {
@@ -96,6 +89,7 @@ impl TorrentFile {
                     c.try_into().map_err(|_| TorrentError::Hash20Error())
                 })
                 .collect(),
+            TorrentFile::V2(_) => todo!(),
         }
     }
 
@@ -108,6 +102,7 @@ impl TorrentFile {
                 },
                 V1Mode::MultiFile { files } => TorrentMode::MultiFile { files },
             },
+            TorrentFile::V2(_) => todo!(),
         }
     }
 
@@ -120,8 +115,23 @@ impl TorrentFile {
 }
 
 #[derive(Debug)]
-pub struct TorrentV1 {
-    info_hash: Hash2OBytes,
+pub enum InfoHash {
+    V1(Hash2OBytes),
+    V2(Hash32Bytes),
+}
+
+impl AsRef<[u8]> for InfoHash {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            InfoHash::V1(h) => h.as_ref(),
+            InfoHash::V2(h) => h.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TorrentCommon {
+    info_hash: InfoHash,
     name: String,
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
@@ -130,7 +140,13 @@ pub struct TorrentV1 {
     creation_date: Option<ByteSize>, // created at, v1 but compatible
     comment: Option<String>,         // comment, v1 but compatible
     created_by: Option<String>,      // created by, v1 but compatible
+}
 
+// Metafile Torrent V1
+
+#[derive(Debug)]
+pub struct TorrentV1 {
+    info: TorrentCommon,
     pub private: bool,     //only v1 must not use PEX or DHT convert to bool
     pub pieces: PieceByte, // chunk old version
     pub mode: V1Mode,
@@ -152,18 +168,20 @@ impl TorrentV1 {
         created_by: Option<String>,
     ) -> Self {
         Self {
-            info_hash,
-            name,
-            announce,
-            announce_list,
-            web_seeds,
-            piece_length,
+            info: TorrentCommon {
+                info_hash: InfoHash::V1(info_hash),
+                name,
+                announce,
+                announce_list,
+                web_seeds,
+                piece_length,
+                creation_date,
+                comment,
+                created_by,
+            },
             private,
             pieces,
             mode,
-            creation_date,
-            comment,
-            created_by,
         }
     }
 }
@@ -186,56 +204,60 @@ pub struct EmbededFile {
     pub md5sum: Option<String>, // file md5 sum
 }
 
-//
-// impl Torrent {
-//
-//
+// Metafile Torrent V2
+#[derive(Debug)]
+pub struct TorrentV2 {
+    info: TorrentCommon,
+    pub piece_layers: HashMap<MerkleRoot, PieceByte>,
+    version: Option<u8>,
+    file_tree: Option<HashMap<String, FileTreeNode>>,
+    pub mode: V1Mode,
+}
 
-// }
+impl TorrentV2 {
+    pub fn new(
+        info_hash: Hash32Bytes,
+        name: String,
+        announce: Option<String>,
+        announce_list: Option<Vec<Vec<String>>>,
+        web_seeds: Option<Vec<String>>,
+        piece_length: ByteSize,
+        creation_date: Option<ByteSize>,
+        comment: Option<String>,
+        created_by: Option<String>,
+        piece_layers: HashMap<MerkleRoot, PieceByte>,
+        version: Option<u8>,
+        file_tree: Option<HashMap<String, FileTreeNode>>,
+        mode: V1Mode,
+    ) -> Self {
+        Self {
+            info: TorrentCommon {
+                info_hash: InfoHash::V2(info_hash),
+                name,
+                announce,
+                announce_list,
+                web_seeds,
+                piece_length,
+                creation_date,
+                comment,
+                created_by,
+            },
+            piece_layers,
+            version,
+            file_tree,
+            mode,
+        }
+    }
+}
 
-// #[derive(Debug)]
-// pub enum TorrentMode {
-//     FileTree {
-//         tree: HashMap<String, FileTreeNode>,
-//     },
-//     SingleFile {
-//         length: ByteSize,
-//         md5sum: Option<String>,
-//     },
-//     MultiFile {
-//         files: Vec<FileInfo>, // v1
-//
-//     },
-// }
-//
-// #[derive(Debug)]
-// pub enum TorrentVersion {
-//     V1,
-//     V2,
-//     Hybrid,
-// }
+#[derive(Debug, Clone)]
+pub struct FileTreeEntry {
+    pub length: i64,
+    pub pieces_root: Option<Hash32Bytes>,
+}
 
-// impl Info {
-//     pub fn piece_length(&self) -> ByteSize {
-//         self.piece_length
-//     }
-//
-//     pub fn version(&self) -> Result<TorrentVersion, TorrentError> {
-//         match (self.version, self.is_hybrid()) {
-//             (None, _) if self.file_tree.is_none() => Ok(TorrentVersion::V1),
-//             (Some(2), true) => Ok(TorrentVersion::Hybrid),
-//             (Some(2), false) => Ok(TorrentVersion::V2),
-//             (Some(1), _) => Err(TorrentError::UnsupportedVersion(1)),
-//             (Some(v), _) => Err(TorrentError::UnsupportedVersion(v)),
-//             _ => Ok(TorrentVersion::V1),
-//         }
-//     }
-//     pub fn is_hybrid(&self) -> bool {
-//         !self.pieces.is_empty() && self.file_tree.is_some()
-//     }
-//
-//     // FIX keep atention that File tree may coexist with multi file or single file
-//    //
-
-// }
-//
+#[derive(Debug, Clone)]
+pub enum FileTreeNode {
+    File { entry: FileTreeEntry },
+    Dir(HashMap<String, FileTreeNode>),
+}
