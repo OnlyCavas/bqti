@@ -41,42 +41,24 @@ impl TorrentBuilder {
         let is_private = metadata.info.is_private();
         let web_seeds = metadata.web_seeds();
 
-        let Some(mode) = metadata.info.mode() else {
-            return Err(TorrentError::UnsupportedVersion(1));
-        };
+        let mode = metadata
+            .info
+            .mode()
+            .ok_or(TorrentError::UnsupportedVersion(1))?;
 
-        let mut builder = TorrentBuilder::with_v1(
+        TorrentBuilder::with_v1(
             metadata.info.name,
             metadata.info.piece_length,
             metadata.info.pieces,
             mode,
-        );
-
-        if let Some(url) = metadata.announce {
-            builder = builder.announce(url);
-        }
-
-        if let Some(tiers) = metadata.announce_list {
-            builder = builder.announce_list(tiers);
-        }
-
-        if let Some(seeds) = web_seeds {
-            builder = builder.web_seeds(seeds);
-        }
-
-        if let Some(ts) = metadata.creation_date {
-            builder = builder.creation_date(ts);
-        }
-
-        if let Some(c) = metadata.comment {
-            builder = builder.comment(c);
-        }
-
-        if let Some(by) = metadata.created_by {
-            builder = builder.created_by(by);
-        }
-
-        builder = builder.private(is_private);
-        builder.build()
+        )
+        .announce(metadata.announce)
+        .announce_list(metadata.announce_list)
+        .web_seeds(web_seeds)
+        .creation_date(metadata.creation_date)
+        .comment(metadata.comment)
+        .created_by(metadata.created_by)
+        .private(is_private)
+        .build()
     }
 }

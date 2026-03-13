@@ -50,56 +50,59 @@ impl V1Builder {
         }
     }
 
-    pub fn announce(mut self, url: impl Into<String>) -> Self {
-        let url = url.into();
-        let tiers = self.announce_list.get_or_insert_with(Vec::new);
+    pub fn announce(mut self, url: impl Into<Option<String>>) -> Self {
+        if let Some(url) = url.into() {
+            let tiers = self.announce_list.get_or_insert_with(|| vec![Vec::new()]);
 
-        if tiers.is_empty() {
-            tiers.push(vec![url.clone()]);
-            self.announce = Some(url);
-        } else {
-            tiers[0].push(url);
-            self.announce = tiers[0].first().cloned();
+            if tiers.is_empty() {
+                tiers.push(Vec::new());
+            }
+
+            tiers[0].push(url.clone());
+
+            if self.announce.is_none() {
+                self.announce = Some(url);
+            }
         }
-
         self
     }
 
-    pub fn announce_list(mut self, tiers: Vec<Vec<String>>) -> Self {
-        self.announce_list = Some(tiers);
+    pub fn announce_list(mut self, tiers: impl Into<Option<Vec<Vec<String>>>>) -> Self {
+        if let Some(ts) = tiers.into() {
+            self.announce_list = Some(ts);
 
-        self.announce = self
-            .announce_list
-            .as_ref()
-            .and_then(|ts| ts.first())
-            .and_then(|tier| tier.first())
-            .cloned();
-
+            self.announce = self
+                .announce_list
+                .as_ref()
+                .and_then(|l| l.first())
+                .and_then(|t| t.first())
+                .cloned();
+        }
         self
     }
 
-    pub fn web_seeds(mut self, urls: Vec<String>) -> Self {
-        self.web_seeds = Some(urls);
+    pub fn web_seeds(mut self, urls: impl Into<Option<Vec<String>>>) -> Self {
+        self.web_seeds = urls.into();
         self
     }
 
-    pub fn private(mut self, private: bool) -> Self {
-        self.private = private;
+    pub fn comment(mut self, comment: impl Into<Option<String>>) -> Self {
+        self.comment = comment.into();
         self
     }
 
-    pub fn creation_date(mut self, unix_timestamp: UnixDate) -> Self {
-        self.creation_date = Some(unix_timestamp);
+    pub fn created_by(mut self, created_by: impl Into<Option<String>>) -> Self {
+        self.created_by = created_by.into();
         self
     }
 
-    pub fn comment(mut self, comment: impl Into<String>) -> Self {
-        self.comment = Some(comment.into());
+    pub fn creation_date(mut self, date: impl Into<Option<UnixDate>>) -> Self {
+        self.creation_date = date.into();
         self
     }
 
-    pub fn created_by(mut self, created_by: impl Into<String>) -> Self {
-        self.created_by = Some(created_by.into());
+    pub fn private(mut self, value: bool) -> Self {
+        self.private = value;
         self
     }
 

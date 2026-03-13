@@ -1,7 +1,7 @@
 use bqti::{
     BQTIError,
     cli::{Cli, SubCommand, Torrent},
-    torrent::{inspect, validate},
+    torrent::{create, inspect, validate},
 };
 use clap::Parser;
 
@@ -13,6 +13,7 @@ fn main() -> Result<(), BQTIError> {
             SubCommand::Torrent { torrent } => match torrent {
                 Torrent::Inspect { torrent } => inspect(torrent, cli.verbose)?,
                 Torrent::Validate { torrent } => validate(torrent)?,
+                Torrent::Create(args) => create(args)?,
             },
         };
     }
