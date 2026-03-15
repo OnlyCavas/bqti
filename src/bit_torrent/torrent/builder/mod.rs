@@ -1,7 +1,10 @@
 use crate::{
-    bit_torrent::torrent::{
-        codec::{self, Metadata, MetadataMode},
-        metainfo::{InfoHash, InfoHashV1, TorrentError, TorrentFile, v1::TorrentV1},
+    bit_torrent::{
+        bencode::{self, BencodeTorrent},
+        torrent::metainfo::{
+            InfoHash, InfoHashV1, TorrentError, TorrentFile,
+            v1::{TorrentV1, V1Mode},
+        },
     },
     types::{ByteSize, PieceByte},
 };
@@ -24,21 +27,21 @@ impl TorrentBuilder {
         name: String,
         piece_length: ByteSize,
         pieces: PieceByte,
-        mode: MetadataMode,
+        mode: V1Mode,
     ) -> V1Builder {
         V1Builder::new(name, piece_length, pieces, mode)
     }
 
-    pub fn apply_from_metadata(metadata: Metadata) -> Result<TorrentFile, TorrentError> {
+    pub fn apply_from_metadata(metadata: BencodeTorrent) -> Result<TorrentFile, TorrentError> {
         let has_pieces = !metadata.info.pieces.is_empty();
         let has_file_tree = metadata.info.file_tree.is_some();
         let raw_hash =
-            codec::info_hash(&metadata.info).map_err(|e| TorrentError::Failed(e.to_string()))?;
+            bencode::info_hash(&metadata.info).map_err(|e| TorrentError::Failed(e.to_string()))?;
 
         match (has_pieces, has_file_tree) {
             (true, false) => {
                 let info_hash = InfoHash::V1(InfoHashV1::new(&raw_hash));
-                let torrent = TorrentV1::from_metadata(metadata, info_hash)?;
+                let torrent = TorrentV1::from_bencode(metadata, info_hash)?;
 
                 Ok(TorrentFile::V1(torrent))
             }

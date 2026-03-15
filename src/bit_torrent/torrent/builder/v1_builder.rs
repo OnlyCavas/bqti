@@ -1,11 +1,9 @@
 use crate::{
     bit_torrent::{
-        torrent::{
-            codec::{self, MetadataInfo, MetadataMode},
-            metainfo::{
-                InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile,
-                v1::{TorrentV1, V1Mode},
-            },
+        bencode::{self, BencodeInfo, BencodeMode},
+        torrent::metainfo::{
+            InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile,
+            v1::{TorrentV1, V1Mode},
         },
         types::{ByteSize, PieceByte},
     },
@@ -17,7 +15,7 @@ pub struct V1Builder {
     private: bool,
     piece_length: ByteSize,
     pieces: PieceByte,
-    mode: MetadataMode,
+    mode: BencodeMode,
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
     web_seeds: Option<Vec<String>>,
@@ -31,7 +29,7 @@ impl V1Builder {
         name: String,
         piece_length: ByteSize,
         pieces: PieceByte,
-        mode: MetadataMode,
+        mode: V1Mode,
     ) -> Self {
         Self {
             name,
@@ -44,7 +42,7 @@ impl V1Builder {
             creation_date: None,
             comment: None,
             created_by: None,
-            mode,
+            mode: BencodeMode::from(mode.clone()),
         }
     }
 
@@ -107,7 +105,7 @@ impl V1Builder {
     fn info_hash(&self) -> Result<InfoHash, TorrentError> {
         let private_flag = if self.private { Some(1u8) } else { None };
 
-        let meta_info = MetadataInfo::v1(
+        let meta_info = BencodeInfo::v1(
             self.name.clone(),
             private_flag,
             self.pieces.clone(),
@@ -115,7 +113,7 @@ impl V1Builder {
             self.mode.clone(),
         );
 
-        match codec::info_hash(&meta_info) {
+        match bencode::info_hash(&meta_info) {
             Ok(info_hash) => Ok(InfoHash::V1(InfoHashV1::new(&info_hash))),
             Err(e) => Err(TorrentError::Failed(e.to_string())),
         }
@@ -124,7 +122,7 @@ impl V1Builder {
     pub fn build(self) -> Result<TorrentFile, TorrentError> {
         let file_path = self.name.clone();
         let info_hash = self.info_hash()?;
-        let mode = V1Mode::from_metadata_mode(self.mode, file_path);
+        let mode = V1Mode::from_bencode_mode(&self.mode, file_path);
 
         Ok(TorrentFile::V1(TorrentV1::new(
             TorrentCommon::new(

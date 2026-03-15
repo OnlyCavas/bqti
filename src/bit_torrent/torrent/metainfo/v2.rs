@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    bit_torrent::torrent::{
-        codec::{Metadata, MetadataFileTreeNode},
-        metainfo::{InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError, v1::EmbededFile},
+    bit_torrent::{
+        bencode::{BencodeFileTreeNode, BencodeTorrent},
+        torrent::metainfo::{
+            InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError, v1::EmbededFile,
+        },
     },
     types::{Hash32Bytes, MerkleRoot, PieceByte},
 };
@@ -21,15 +23,15 @@ pub enum FileTreeNode {
 }
 
 impl FileTreeNode {
-    pub fn from_metadata(metadata: &MetadataFileTreeNode) -> Self {
+    pub fn from_metadata(metadata: &BencodeFileTreeNode) -> Self {
         match metadata {
-            MetadataFileTreeNode::File { entry } => FileTreeNode::File {
+            BencodeFileTreeNode::File { entry } => FileTreeNode::File {
                 entry: FileTreeEntry {
                     length: entry.length,
                     pieces_root: entry.pieces_root,
                 },
             },
-            MetadataFileTreeNode::Dir(files) => {
+            BencodeFileTreeNode::Dir(files) => {
                 let converted = files
                     .iter()
                     .map(|(name, child_node)| {
@@ -72,7 +74,7 @@ impl TorrentV2 {
     }
 
     pub fn from_metadata(
-        metadata: Metadata,
+        metadata: BencodeTorrent,
         info_hash: InfoHash,
     ) -> Result<TorrentV2, TorrentError> {
         let mut flat_files = Vec::new();
@@ -108,12 +110,12 @@ impl TorrentV2 {
     }
 
     fn walk_and_flatten(
-        node: &MetadataFileTreeNode,
+        node: &BencodeFileTreeNode,
         current_path: &mut Vec<String>,
         out: &mut Vec<EmbededFile>,
     ) -> u64 {
         match node {
-            MetadataFileTreeNode::File { entry } => {
+            BencodeFileTreeNode::File { entry } => {
                 let length = entry.length;
                 out.push(EmbededFile {
                     length: length,
@@ -123,7 +125,7 @@ impl TorrentV2 {
 
                 length as u64
             }
-            MetadataFileTreeNode::Dir(children) => {
+            BencodeFileTreeNode::Dir(children) => {
                 let mut dir_size = 0;
                 for (name, child) in children {
                     current_path.push(name.clone());

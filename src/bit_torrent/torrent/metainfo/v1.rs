@@ -1,7 +1,7 @@
 use crate::{
-    bit_torrent::torrent::{
-        codec::{Metadata, MetadataMode},
-        metainfo::{InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError},
+    bit_torrent::{
+        bencode::{BencodeMode, BencodeTorrent, FileInfo},
+        torrent::metainfo::{InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError},
     },
     types::{ByteSize, PieceByte},
 };
@@ -13,17 +13,31 @@ pub enum V1Mode {
 }
 
 impl V1Mode {
-    pub fn from_metadata_mode(mode: MetadataMode, torrent_name: String) -> Self {
+    pub fn from_bencode_mode(mode: &BencodeMode, torrent_name: String) -> Self {
         match mode {
-            MetadataMode::SingleFile { length, md5sum } => V1Mode::SingleFile {
+            BencodeMode::SingleFile { length, md5sum } => V1Mode::SingleFile {
                 file: EmbededFile {
-                    length,
+                    length: *length,
                     path: vec![torrent_name],
-                    md5sum,
+                    md5sum: md5sum.clone(),
                 },
             },
-            MetadataMode::MultiFile { files } => V1Mode::MultiFile {
-                files: files.into_iter().map(EmbededFile::from).collect(),
+            BencodeMode::MultiFile { files } => V1Mode::MultiFile {
+                files: files.iter().map(|f| EmbededFile::from(f.clone())).collect(),
+            },
+        }
+    }
+}
+
+impl From<V1Mode> for BencodeMode {
+    fn from(value: V1Mode) -> Self {
+        match value {
+            V1Mode::SingleFile { file } => BencodeMode::SingleFile {
+                length: file.length,
+                md5sum: file.md5sum,
+            },
+            V1Mode::MultiFile { files } => BencodeMode::MultiFile {
+                files: files.iter().map(|f| FileInfo::from(f.clone())).collect(),
             },
         }
     }
@@ -34,6 +48,26 @@ pub struct EmbededFile {
     pub length: ByteSize,
     pub path: Vec<String>,
     pub md5sum: Option<String>,
+}
+
+impl From<FileInfo> for EmbededFile {
+    fn from(value: FileInfo) -> Self {
+        EmbededFile {
+            length: value.length,
+            path: value.path,
+            md5sum: value.md5sum,
+        }
+    }
+}
+
+impl From<EmbededFile> for FileInfo {
+    fn from(value: EmbededFile) -> Self {
+        FileInfo {
+            length: value.length,
+            path: value.path,
+            md5sum: value.md5sum,
+        }
+    }
 }
 
 pub struct TorrentV1 {
@@ -53,8 +87,8 @@ impl TorrentV1 {
         }
     }
 
-    pub fn from_metadata(
-        metadata: Metadata,
+    pub fn from_bencode(
+        metadata: BencodeTorrent,
         info_hash: InfoHash,
     ) -> Result<TorrentV1, TorrentError> {
         let web_seeds = metadata.web_seeds();
@@ -64,7 +98,7 @@ impl TorrentV1 {
         let mode = metadata
             .info
             .mode()
-            .map(|mode| V1Mode::from_metadata_mode(mode, file_path))
+            .map(|mode| V1Mode::from_bencode_mode(&mode, file_path))
             .ok_or(TorrentError::NotValid(
                 "Unable to determine file mode".into(),
             ))?;

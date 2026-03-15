@@ -6,8 +6,10 @@ use crate::{
     BQTIError, BitTorrentError,
     bit_torrent::torrent::{
         builder::TorrentBuilder,
-        codec::MetadataMode,
-        metainfo::{Integrity, Metainfo, TorrentError, TorrentFile},
+        metainfo::{
+            Integrity, Metainfo, TorrentError, TorrentFile,
+            v1::{EmbededFile, V1Mode},
+        },
     },
     cli::{CreateArgs, TorrentVersion},
     load, save, utils,
@@ -21,9 +23,12 @@ pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
             "my torrent".into(),
             1,
             ByteBuf::new(),
-            MetadataMode::SingleFile {
-                length: 0,
-                md5sum: None,
+            V1Mode::SingleFile {
+                file: EmbededFile {
+                    path: vec!["".into()],
+                    length: 0,
+                    md5sum: None,
+                },
             },
         )
         .build(),

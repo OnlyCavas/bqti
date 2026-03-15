@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
 
 use crate::{
-    bit_torrent::torrent::metainfo::{
-        v1::{EmbededFile, TorrentV1},
-        v2::TorrentV2,
+    bit_torrent::{
+        bencode::{BencodeInfo, BencodeTorrent, FileInfo},
+        torrent::metainfo::{
+            v1::{EmbededFile, TorrentV1},
+            v2::TorrentV2,
+        },
     },
     types::{ByteSize, Hash2OBytes, Hash32Bytes, UnixDate},
 };
@@ -146,5 +151,50 @@ impl TorrentCommon {
             created_by,
             web_seeds,
         }
+    }
+}
+
+impl From<&TorrentFile> for BencodeInfo {
+    fn from(value: &TorrentFile) -> Self {
+        let all_files = value.files();
+
+        let (length, files) = if all_files.len() == 1 {
+            (Some(all_files[0].length as i64), None)
+        } else {
+            let converted: Vec<FileInfo> = all_files
+                .iter()
+                .map(|f| FileInfo::from(f.clone()))
+                .collect();
+
+            (None, Some(converted))
+        };
+
+        BencodeInfo {
+            name: value.name().to_string(),
+            version: Some(value.version()),
+            piece_length: value.piece_length() as i64,
+            private: if value.is_private() { Some(1) } else { Some(0) },
+            length,
+            files,
+            file_tree: None,
+            pieces: serde_bytes::ByteBuf::from(value.raw_pieces().to_vec()),
+            md5sum: None,
+        }
+    }
+}
+
+impl From<&TorrentFile> for BencodeTorrent {
+    fn from(value: &TorrentFile) -> Self {
+        BencodeTorrent::new(
+            value.announce().map(|s| s.to_string()),
+            value.into(),
+            value.announce_list().map(|l| l.to_vec()),
+            value.creation_date(),
+            value.comment().map(|s| s.to_string()),
+            value.created_by().map(|s| s.to_string()),
+            value.web_seeds().map(|l| l.to_vec()),
+            HashMap::new(), // FIX missing the v2 impl
+            HashMap::new(), // FIX missing the v2 impl
+        )
     }
 }
