@@ -7,7 +7,7 @@ use crate::{
     bit_torrent::torrent::{
         builder::TorrentBuilder,
         codec::MetadataMode,
-        metainfo::{Metainfo, TorrentError, TorrentFile, TorrentIntegrity},
+        metainfo::{Integrity, Metainfo, TorrentError, TorrentFile},
     },
     cli::{CreateArgs, TorrentVersion},
     load, save, utils,
@@ -49,6 +49,7 @@ pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
         let filename = format!("{}.torrent", clean_name);
         final_path.push(filename);
     }
+
     let path_str = final_path.to_str().ok_or_else(|| {
         BitTorrentError::Torrent(TorrentError::Failed("Caminho UTF-8 inválido".into()))
     })?;

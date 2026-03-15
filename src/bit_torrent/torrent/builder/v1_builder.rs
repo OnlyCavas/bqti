@@ -1,15 +1,13 @@
-use sha1::{Digest, Sha1};
-
 use crate::{
     bit_torrent::{
         torrent::{
             codec::{self, MetadataInfo, MetadataMode},
             metainfo::{
-                EmbededFile, InfoHash, TorrentCommon, TorrentError, TorrentFile, V1Mode,
-                v1::TorrentV1,
+                InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile,
+                v1::{TorrentV1, V1Mode},
             },
         },
-        types::{ByteSize, Hash2OBytes, PieceByte},
+        types::{ByteSize, PieceByte},
     },
     types::UnixDate,
 };
@@ -106,10 +104,9 @@ impl V1Builder {
         self
     }
 
-    fn info_hash(&self) -> Result<Hash2OBytes, TorrentError> {
+    fn info_hash(&self) -> Result<InfoHash, TorrentError> {
         let private_flag = if self.private { Some(1u8) } else { None };
 
-        // FIX remove clone
         let meta_info = MetadataInfo::v1(
             self.name.clone(),
             private_flag,
@@ -119,24 +116,19 @@ impl V1Builder {
         );
 
         match codec::info_hash(&meta_info) {
-            Ok(info_hash) => Ok(Sha1::digest(info_hash).into()),
+            Ok(info_hash) => Ok(InfoHash::V1(InfoHashV1::new(&info_hash))),
             Err(e) => Err(TorrentError::Failed(e.to_string())),
         }
     }
 
     pub fn build(self) -> Result<TorrentFile, TorrentError> {
+        let file_path = self.name.clone();
         let info_hash = self.info_hash()?;
-
-        let mode = match self.mode {
-            MetadataMode::SingleFile { length, md5sum } => V1Mode::SingleFile { length, md5sum },
-            MetadataMode::MultiFile { files } => V1Mode::MultiFile {
-                files: files.into_iter().map(EmbededFile::from).collect(),
-            },
-        };
+        let mode = V1Mode::from_metadata_mode(self.mode, file_path);
 
         Ok(TorrentFile::V1(TorrentV1::new(
             TorrentCommon::new(
-                InfoHash::V1(info_hash),
+                info_hash,
                 self.name,
                 self.announce,
                 self.announce_list,

@@ -63,10 +63,10 @@ impl Metadata {
         let (length, files) = if all_files.len() == 1 {
             (Some(all_files[0].length as i64), None)
         } else {
-            let converted = all_files
-                .into_iter()
-                .map(FileInfo::from)
-                .collect::<Vec<FileInfo>>();
+            let converted: Vec<FileInfo> = all_files
+                .iter()
+                .map(|f| FileInfo::from(f.clone()))
+                .collect();
 
             (None, Some(converted))
         };

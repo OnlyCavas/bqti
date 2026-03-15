@@ -1,9 +1,40 @@
 use crate::{
-    bit_torrent::torrent::metainfo::{
-        EmbededFile, Metainfo, TorrentCommon, TorrentError, TorrentIntegrity, V1Mode,
+    bit_torrent::torrent::{
+        codec::{Metadata, MetadataMode},
+        metainfo::{InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError},
     },
-    types::PieceByte,
+    types::{ByteSize, PieceByte},
 };
+
+#[derive(Debug, Clone)]
+pub enum V1Mode {
+    SingleFile { file: EmbededFile },
+    MultiFile { files: Vec<EmbededFile> },
+}
+
+impl V1Mode {
+    pub fn from_metadata_mode(mode: MetadataMode, torrent_name: String) -> Self {
+        match mode {
+            MetadataMode::SingleFile { length, md5sum } => V1Mode::SingleFile {
+                file: EmbededFile {
+                    length,
+                    path: vec![torrent_name],
+                    md5sum,
+                },
+            },
+            MetadataMode::MultiFile { files } => V1Mode::MultiFile {
+                files: files.into_iter().map(EmbededFile::from).collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbededFile {
+    pub length: ByteSize,
+    pub path: Vec<String>,
+    pub md5sum: Option<String>,
+}
 
 pub struct TorrentV1 {
     pub(crate) info: TorrentCommon,
@@ -21,9 +52,43 @@ impl TorrentV1 {
             mode,
         }
     }
+
+    pub fn from_metadata(
+        metadata: Metadata,
+        info_hash: InfoHash,
+    ) -> Result<TorrentV1, TorrentError> {
+        let web_seeds = metadata.web_seeds();
+        let file_path = metadata.info.name.clone();
+        let private = metadata.info.private.unwrap_or(0) == 1;
+
+        let mode = metadata
+            .info
+            .mode()
+            .map(|mode| V1Mode::from_metadata_mode(mode, file_path))
+            .ok_or(TorrentError::NotValid(
+                "Unable to determine file mode".into(),
+            ))?;
+
+        Ok(TorrentV1::new(
+            TorrentCommon {
+                info_hash,
+                name: metadata.info.name,
+                announce: metadata.announce,
+                announce_list: metadata.announce_list,
+                piece_length: metadata.info.piece_length,
+                creation_date: metadata.creation_date,
+                comment: metadata.comment,
+                created_by: metadata.created_by,
+                web_seeds: web_seeds,
+            },
+            private,
+            metadata.info.pieces,
+            mode,
+        ))
+    }
 }
 
-impl TorrentIntegrity for TorrentV1 {
+impl Integrity for TorrentV1 {
     fn validate(&self) -> Result<(), TorrentError> {
         let total_size = self.total_size();
         let pl_len = self.piece_length();
@@ -93,7 +158,7 @@ impl Metainfo for TorrentV1 {
 
     fn total_size(&self) -> u64 {
         match &self.mode {
-            V1Mode::SingleFile { length, .. } => *length as u64,
+            V1Mode::SingleFile { file } => file.length as u64,
             V1Mode::MultiFile { files } => files.iter().map(|file| file.length as u64).sum(),
         }
     }
@@ -102,14 +167,10 @@ impl Metainfo for TorrentV1 {
         self.private
     }
 
-    fn files(&self) -> Vec<EmbededFile> {
+    fn files(&self) -> &[EmbededFile] {
         match &self.mode {
-            V1Mode::SingleFile { length, md5sum } => vec![EmbededFile {
-                length: *length,
-                path: vec![self.info.name.clone()],
-                md5sum: md5sum.clone(),
-            }],
-            V1Mode::MultiFile { files } => files.clone(),
+            V1Mode::SingleFile { file } => std::slice::from_ref(file),
+            V1Mode::MultiFile { files } => files.as_slice(),
         }
     }
 

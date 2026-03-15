@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::bit_torrent::{
-    torrent::metainfo::EmbededFile,
+    torrent::metainfo::v1::EmbededFile,
     types::{ByteSize, PieceByte},
 };
 
@@ -26,7 +26,7 @@ pub struct MetadataInfo {
     pub(crate) version: Option<u8>, // only v2
 
     #[serde(rename = "file tree", default)]
-    pub file_tree: Option<HashMap<String, MetadataFileTreeEntry>>,
+    pub file_tree: Option<HashMap<String, MetadataFileTreeNode>>,
 
     #[serde(rename = "private", default)] // some versions
     pub(crate) private: Option<u8>, //only v1 must not use PEX or DHT

@@ -2,11 +2,15 @@ use enum_dispatch::enum_dispatch;
 use thiserror::Error;
 
 use crate::{
-    bit_torrent::torrent::metainfo::v1::TorrentV1,
+    bit_torrent::torrent::metainfo::{
+        v1::{EmbededFile, TorrentV1},
+        v2::TorrentV2,
+    },
     types::{ByteSize, Hash2OBytes, Hash32Bytes, UnixDate},
 };
 
 pub mod v1;
+pub mod v2;
 
 #[derive(Error, Debug)]
 pub enum TorrentError {
@@ -26,9 +30,10 @@ pub enum TorrentError {
     Unsupported(String),
 }
 
-#[enum_dispatch(Metainfo, TorrentIntegrity)]
+#[enum_dispatch(Metainfo, Integrity)]
 pub enum TorrentFile {
     V1(TorrentV1),
+    V2(TorrentV2),
 }
 
 #[enum_dispatch]
@@ -41,7 +46,7 @@ pub trait Metainfo {
     fn piece_length(&self) -> u64;
     fn total_size(&self) -> u64;
     fn is_private(&self) -> bool;
-    fn files(&self) -> Vec<EmbededFile>;
+    fn files(&self) -> &[EmbededFile];
     fn web_seeds(&self) -> Option<&[String]>;
     fn comment(&self) -> Option<&str>;
     fn created_by(&self) -> Option<&str>;
@@ -60,21 +65,47 @@ pub trait Metainfo {
 }
 
 #[enum_dispatch]
-pub trait TorrentIntegrity {
+pub trait Integrity {
     fn validate(&self) -> Result<(), TorrentError>;
 }
 
 #[derive(Debug, Clone)]
 pub enum InfoHash {
-    V1(Hash2OBytes),
-    V2(Hash32Bytes),
+    V1(InfoHashV1),
+    V2(InfoHashV2),
+}
+
+#[derive(Debug, Clone)]
+pub struct InfoHashV1(Hash2OBytes);
+
+impl InfoHashV1 {
+    pub fn new(bytes: &[u8]) -> Self {
+        use sha1::{Digest, Sha1};
+        let mut hasher = Sha1::new();
+        hasher.update(&bytes);
+
+        Self(hasher.finalize().into())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InfoHashV2(Hash32Bytes);
+
+impl InfoHashV2 {
+    pub fn new(bytes: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+
+        Self(hasher.finalize().into())
+    }
 }
 
 impl AsRef<[u8]> for InfoHash {
     fn as_ref(&self) -> &[u8] {
         match self {
-            InfoHash::V1(h) => h.as_ref(),
-            InfoHash::V2(h) => h.as_ref(),
+            InfoHash::V1(h) => h.0.as_ref(),
+            InfoHash::V2(h) => h.0.as_ref(),
         }
     }
 }
@@ -116,22 +147,4 @@ impl TorrentCommon {
             web_seeds,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum V1Mode {
-    SingleFile {
-        length: ByteSize,
-        md5sum: Option<String>,
-    },
-    MultiFile {
-        files: Vec<EmbededFile>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct EmbededFile {
-    pub length: ByteSize,
-    pub path: Vec<String>,
-    pub md5sum: Option<String>,
 }

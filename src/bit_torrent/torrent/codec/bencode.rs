@@ -12,16 +12,22 @@ pub enum BencodeError {
 
     #[error("Decode error: {0}")]
     Decode(String),
+
+    #[error("Encode error: {0}")]
+    Encode(String),
+
+    #[error("Info Hash error: {0}")]
+    InfoHash(String),
 }
 
 pub fn decode(bytes: Vec<u8>) -> Result<Metadata, BencodeError> {
     let metadata = serde_bencode::from_bytes::<Metadata>(&bytes)
-        .map_err(|e| BencodeError::Decode(e.to_string() + "here"))?;
+        .map_err(|e| BencodeError::Decode(e.to_string()))?;
 
     Ok(metadata)
 }
 
-pub fn info_hash(meta_info: &MetadataInfo) -> Result<EncodedBytes, BencodeError> {
+pub fn info_hash(meta_info: &MetadataInfo) -> Result<Vec<u8>, BencodeError> {
     match serde_bencode::to_bytes(&meta_info) {
         Ok(bytes) => Ok(bytes),
         Err(e) => Err(BencodeError::Decode(e.to_string())),
@@ -31,6 +37,6 @@ pub fn info_hash(meta_info: &MetadataInfo) -> Result<EncodedBytes, BencodeError>
 pub fn encode(metadata: &Metadata) -> Result<EncodedBytes, BencodeError> {
     match serde_bencode::to_bytes(&metadata) {
         Ok(bytes) => Ok(bytes),
-        Err(e) => Err(BencodeError::Decode(e.to_string())),
+        Err(e) => Err(BencodeError::Encode(e.to_string())),
     }
 }
