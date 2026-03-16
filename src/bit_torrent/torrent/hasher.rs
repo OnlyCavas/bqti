@@ -130,9 +130,11 @@ fn dispatch_file_metadata(
     let Ok(file) = File::open(&path) else {
         return Err(TorrentError::Failed("failed to open file".into()));
     };
+
     let Ok(metadata) = file.metadata() else {
         return Err(TorrentError::Failed("failed get file metadata".into()));
     };
+
     let Some(file_path) = path.to_str() else {
         return Err(TorrentError::Failed("failed to parse file path".into()));
     };

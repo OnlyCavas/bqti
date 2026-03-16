@@ -235,7 +235,6 @@ impl Metainfo for TorrentV2 {
         self.total_size
     }
 
-    // FIX make it possible on torrent v2, to support mixed versions
     fn is_private(&self) -> bool {
         false
     }

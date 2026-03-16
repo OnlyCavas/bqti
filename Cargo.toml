@@ -17,3 +17,5 @@ either = "1.15.0"
 clap = { version = "4", features = ["derive"] }
 enum_dispatch = "0.3.13"
 crossbeam = "0.8.4"
+tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_level_debug"] }
+tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }

@@ -4,6 +4,6 @@ use crate::BitTorrentError;
 
 #[derive(Error, Debug)]
 pub enum BQTIError {
-    #[error(transparent)]
+    #[error("{0}")]
     BitTorrent(#[from] BitTorrentError),
 }
