@@ -16,3 +16,4 @@ strum = { version = "0.27", features = ["derive"] }
 either = "1.15.0"
 clap = { version = "4", features = ["derive"] }
 enum_dispatch = "0.3.13"
+crossbeam = "0.8.4"

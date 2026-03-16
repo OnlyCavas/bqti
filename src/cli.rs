@@ -31,14 +31,29 @@ pub enum TorrentVersion {
 pub struct CreateArgs {
     pub path: PathBuf,
 
-    #[arg(short = 'V', long, value_enum, default_value_t = TorrentVersion::V1)]
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    #[arg(short, long, num_args = 1..)]
+    pub files: Vec<PathBuf>,
+
+    #[arg(long, value_enum, default_value_t = TorrentVersion::V1)]
     pub version: TorrentVersion,
 
-    #[arg(short, long)]
-    pub announce: Option<String>,
+    #[arg(
+        short = 't',
+        long = "tracker",
+        num_args = 1..,
+        value_parser = parse_tier
+    )]
+    pub announce: Vec<Vec<String>>,
 
-    #[arg(short = 't', long = "tracker")]
-    pub announce_list: Vec<String>,
+    #[arg(
+        short = 's',
+        long = "seeds",
+        num_args = 1..,
+    )]
+    pub seeds: Option<Vec<String>>,
 
     #[arg(short = 'l', long = "length", default_value_t = 524288)]
     pub piece_length: u64,
@@ -54,6 +69,10 @@ pub struct CreateArgs {
 
     #[arg(short, long)]
     pub output: Option<String>,
+}
+
+fn parse_tier(s: &str) -> Result<Vec<String>, String> {
+    Ok(s.split(',').map(String::from).collect())
 }
 
 #[derive(Subcommand)]

@@ -171,9 +171,9 @@ impl From<&TorrentFile> for BencodeInfo {
 
         BencodeInfo {
             name: value.name().to_string(),
-            version: Some(value.version()),
+            version: (value.version() != 1).then_some(value.version()),
             piece_length: value.piece_length() as i64,
-            private: if value.is_private() { Some(1) } else { Some(0) },
+            private: value.is_private().then_some(1),
             length,
             files,
             file_tree: None,

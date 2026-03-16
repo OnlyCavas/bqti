@@ -7,28 +7,46 @@ use crate::types::{ByteSize, MerkleRoot, PieceByte, UnixDate};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BencodeTorrent {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub announce: Option<String>, // sigle or main tracker both v1 and v2
-    pub info: BencodeInfo,        // torrent info, both v1 and v2
 
-    #[serde(rename = "announce-list", default)]
+    pub info: BencodeInfo, // torrent info, both v1 and v2
+
+    #[serde(
+        rename = "announce-list",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub announce_list: Option<Vec<Vec<String>>>, // fallback tracker list, v1 optional
 
-    #[serde(rename = "creation date", default)]
+    #[serde(
+        rename = "creation date",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub creation_date: Option<UnixDate>, // created at, v1 but compatible
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>, // comment, v1 but compatible
 
-    #[serde(rename = "created by", default)]
+    #[serde(
+        rename = "created by",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_by: Option<String>, // created by, v1 but compatible
 
-    #[serde(rename = "url-list")]
+    #[serde(rename = "url-list", skip_serializing_if = "Option::is_none")]
     url_list: Option<Vec<String>>, // BEP 19 (GetRight), fallback and compatible
 
-    #[serde(flatten)]
+    #[serde(flatten, skip_serializing_if = "HashMap::is_empty")]
     extra: HashMap<String, serde_bencode::value::Value>,
 
-    #[serde(rename = "piece layers", default)]
+    #[serde(
+        rename = "piece layers",
+        default,
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub piece_layers: HashMap<MerkleRoot, PieceByte>, // only on v2, n * 32
 }
 
@@ -103,13 +121,17 @@ pub enum BencodeMode {
 pub struct BencodeInfo {
     pub name: String, // file name
 
-    #[serde(rename = "meta version", default)] // some versions
+    #[serde(
+        rename = "meta version",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )] // some versions
     pub(crate) version: Option<u8>, // only v2
 
-    #[serde(rename = "file tree", default)]
+    #[serde(rename = "file tree", default, skip_serializing_if = "Option::is_none")]
     pub file_tree: Option<HashMap<String, BencodeFileTreeNode>>,
 
-    #[serde(rename = "private", default)] // some versions
+    #[serde(rename = "private", default, skip_serializing_if = "Option::is_none")] // some versions
     pub(crate) private: Option<u8>, //only v1 must not use PEX or DHT
 
     pub pieces: PieceByte, // chunk old version
@@ -117,8 +139,13 @@ pub struct BencodeInfo {
     #[serde(rename = "piece length")]
     pub piece_length: ByteSize, // each piece length
 
-    pub(crate) length: Option<ByteSize>,     // single file
-    pub(crate) md5sum: Option<String>,       // single file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) length: Option<ByteSize>, // single file
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) md5sum: Option<String>, // single file
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) files: Option<Vec<FileInfo>>, // multiple embeded files
 }
 

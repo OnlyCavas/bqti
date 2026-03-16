@@ -1,37 +1,38 @@
 use std::path::PathBuf;
 
-use serde_bytes::ByteBuf;
-
 use crate::{
     BQTIError, BitTorrentError,
     bit_torrent::torrent::{
         builder::TorrentBuilder,
-        metainfo::{
-            Integrity, Metainfo, TorrentError, TorrentFile,
-            v1::{EmbededFile, V1Mode},
-        },
+        metainfo::{Integrity, Metainfo, TorrentError, TorrentFile},
     },
     cli::{CreateArgs, TorrentVersion},
     load, save, utils,
 };
 
-pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
-    // TODO generate pieces and hashes, depending the torrent version
+fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
+    if let Some(name) = &args.name {
+        return Ok(name);
+    }
 
+    let Some(Some(file_name)) = args.path.file_name().map(|name| name.to_str()) else {
+        return Err(BQTIError::BitTorrent(BitTorrentError::InvalidPath()));
+    };
+
+    Ok(file_name)
+}
+
+pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
     let builder = match args.version {
-        TorrentVersion::V1 => TorrentBuilder::with_v1(
-            "my torrent".into(),
-            1,
-            ByteBuf::new(),
-            V1Mode::SingleFile {
-                file: EmbededFile {
-                    path: vec!["".into()],
-                    length: 0,
-                    md5sum: None,
-                },
-            },
-        )
-        .build(),
+        TorrentVersion::V1 => TorrentBuilder::with_v1(file_name(&args)?, args.piece_length as i64)
+            .file(args.path)
+            .files(args.files)
+            .announce_list(args.announce)
+            .web_seeds(args.seeds)
+            .comment(args.comment)
+            .private(args.private)
+            .created_by(args.created_by)
+            .build(),
         TorrentVersion::V2 => todo!(),
         TorrentVersion::Hybrid => todo!(),
     };

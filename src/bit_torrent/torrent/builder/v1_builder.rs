@@ -1,21 +1,25 @@
+use std::{fs, path::PathBuf};
+
 use crate::{
     bit_torrent::{
         bencode::{self, BencodeInfo, BencodeMode},
-        torrent::metainfo::{
-            InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile,
-            v1::{TorrentV1, V1Mode},
+        torrent::{
+            hasher::{PieceHasher, PieceHasherV1},
+            metainfo::{
+                InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile, v1::TorrentV1,
+            },
         },
-        types::{ByteSize, PieceByte},
+        types::ByteSize,
     },
-    types::UnixDate,
+    types::{PieceByte, UnixDate},
+    utils::bqti,
 };
 
 pub struct V1Builder {
     name: String,
     private: bool,
     piece_length: ByteSize,
-    pieces: PieceByte,
-    mode: BencodeMode,
+    paths: Vec<PathBuf>,
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
     web_seeds: Option<Vec<String>>,
@@ -24,17 +28,13 @@ pub struct V1Builder {
     created_by: Option<String>,
 }
 
+#[allow(dead_code)]
 impl V1Builder {
-    pub(crate) fn new(
-        name: String,
-        piece_length: ByteSize,
-        pieces: PieceByte,
-        mode: V1Mode,
-    ) -> Self {
+    pub(crate) fn new(name: impl Into<String>, piece_length: ByteSize) -> Self {
         Self {
-            name,
+            name: name.into(),
             piece_length,
-            pieces,
+            paths: Vec::new(),
             private: false,
             announce: None,
             announce_list: None,
@@ -42,38 +42,62 @@ impl V1Builder {
             creation_date: None,
             comment: None,
             created_by: None,
-            mode: BencodeMode::from(mode.clone()),
         }
     }
 
-    pub fn announce(mut self, url: impl Into<Option<String>>) -> Self {
-        if let Some(url) = url.into() {
-            let tiers = self.announce_list.get_or_insert_with(|| vec![Vec::new()]);
+    pub fn file(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
 
-            if tiers.is_empty() {
-                tiers.push(Vec::new());
-            }
+        if !path.is_dir() {
+            self.paths.push(path);
+            return self;
+        }
 
-            tiers[0].push(url.clone());
-
-            if self.announce.is_none() {
-                self.announce = Some(url);
+        if let Ok(files) = fs::read_dir(&path) {
+            for entry in files.flatten() {
+                self = self.file(entry.path());
             }
         }
+
         self
     }
 
-    pub fn announce_list(mut self, tiers: impl Into<Option<Vec<Vec<String>>>>) -> Self {
-        if let Some(ts) = tiers.into() {
-            self.announce_list = Some(ts);
-
-            self.announce = self
-                .announce_list
-                .as_ref()
-                .and_then(|l| l.first())
-                .and_then(|t| t.first())
-                .cloned();
+    pub fn files(mut self, file_paths: impl IntoIterator<Item = impl Into<PathBuf>>) -> Self {
+        for path in file_paths {
+            self = self.file(path);
         }
+
+        self
+    }
+
+    pub fn announce(mut self, url: impl Into<String>) -> Self {
+        let url: String = url.into();
+
+        let tiers = self.announce_list.get_or_insert_with(|| vec![Vec::new()]);
+
+        if tiers.is_empty() {
+            tiers.push(Vec::new());
+        }
+
+        tiers[0].push(url.clone());
+
+        if self.announce.is_none() {
+            self.announce = Some(url);
+        }
+
+        self
+    }
+
+    pub fn announce_list(mut self, tiers: impl Into<Vec<Vec<String>>>) -> Self {
+        self.announce_list = Some(tiers.into());
+
+        self.announce = self
+            .announce_list
+            .as_ref()
+            .and_then(|l| l.first())
+            .and_then(|t| t.first())
+            .cloned();
+
         self
     }
 
@@ -102,15 +126,15 @@ impl V1Builder {
         self
     }
 
-    fn info_hash(&self) -> Result<InfoHash, TorrentError> {
-        let private_flag = if self.private { Some(1u8) } else { None };
+    fn info_hash(&self, pieces: &PieceByte, mode: &BencodeMode) -> Result<InfoHash, TorrentError> {
+        let private_flag = self.private.then_some(1u8);
 
         let meta_info = BencodeInfo::v1(
             self.name.clone(),
             private_flag,
-            self.pieces.clone(),
+            pieces.clone(),
             self.piece_length,
-            self.mode.clone(),
+            mode.clone(),
         );
 
         match bencode::info_hash(&meta_info) {
@@ -120,9 +144,19 @@ impl V1Builder {
     }
 
     pub fn build(self) -> Result<TorrentFile, TorrentError> {
-        let file_path = self.name.clone();
-        let info_hash = self.info_hash()?;
-        let mode = V1Mode::from_bencode_mode(&self.mode, file_path);
+        // TODO check the piece length, must be to the power of two
+
+        if self.paths.is_empty() {
+            return Err(TorrentError::NotValid(
+                "no files added to the builder".into(),
+            ));
+        }
+
+        let mut hasher = PieceHasherV1::new(self.piece_length as usize);
+        self.paths.iter().fold(&mut hasher, |h, p| h.file(p));
+
+        let (pieces, mode) = hasher.finalize()?;
+        let info_hash = self.info_hash(&pieces, &BencodeMode::from(mode.clone()))?;
 
         Ok(TorrentFile::V1(TorrentV1::new(
             TorrentCommon::new(
@@ -131,13 +165,13 @@ impl V1Builder {
                 self.announce,
                 self.announce_list,
                 self.piece_length,
-                self.creation_date,
+                self.creation_date.or(Some(bqti::fetch_current_timestamp())),
                 self.comment,
-                self.created_by,
+                self.created_by.or(Some(bqti::version())),
                 self.web_seeds,
             ),
             self.private,
-            self.pieces,
+            pieces,
             mode,
         )))
     }

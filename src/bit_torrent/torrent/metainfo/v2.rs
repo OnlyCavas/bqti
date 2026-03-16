@@ -1,10 +1,15 @@
 use std::collections::HashMap;
 
+use clap::error::Result;
+
 use crate::{
     bit_torrent::{
         bencode::{BencodeFileTreeNode, BencodeTorrent},
-        torrent::metainfo::{
-            InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError, v1::EmbededFile,
+        torrent::{
+            merkle::MerkleTree,
+            metainfo::{
+                InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError, v1::EmbededFile,
+            },
         },
     },
     types::{Hash32Bytes, MerkleRoot, PieceByte},
@@ -22,9 +27,9 @@ pub enum FileTreeNode {
     Dir(HashMap<String, FileTreeNode>),
 }
 
-impl FileTreeNode {
-    pub fn from_metadata(metadata: &BencodeFileTreeNode) -> Self {
-        match metadata {
+impl From<&BencodeFileTreeNode> for FileTreeNode {
+    fn from(value: &BencodeFileTreeNode) -> Self {
+        match value {
             BencodeFileTreeNode::File { entry } => FileTreeNode::File {
                 entry: FileTreeEntry {
                     length: entry.length,
@@ -34,9 +39,7 @@ impl FileTreeNode {
             BencodeFileTreeNode::Dir(files) => {
                 let converted = files
                     .iter()
-                    .map(|(name, child_node)| {
-                        (name.clone(), FileTreeNode::from_metadata(child_node))
-                    })
+                    .map(|(name, child_node)| (name.clone(), FileTreeNode::from(child_node)))
                     .collect();
 
                 FileTreeNode::Dir(converted)
@@ -49,9 +52,9 @@ pub struct TorrentV2 {
     pub(crate) info: TorrentCommon,
     pub(crate) version: Option<u8>,
     pub(crate) piece_layers: HashMap<MerkleRoot, PieceByte>,
-    pub(crate) file_tree: Option<HashMap<String, FileTreeNode>>,
-    pub(crate) flat_files: Vec<EmbededFile>,
-    pub(crate) total_size: u64,
+    file_tree: Option<HashMap<String, FileTreeNode>>,
+    flat_files: Option<Vec<EmbededFile>>,
+    total_size: u64,
 }
 
 impl TorrentV2 {
@@ -60,7 +63,7 @@ impl TorrentV2 {
         version: Option<u8>,
         piece_layers: HashMap<MerkleRoot, PieceByte>,
         file_tree: Option<HashMap<String, FileTreeNode>>,
-        flat_files: Vec<EmbededFile>,
+        flat_files: Option<Vec<EmbededFile>>,
         total_size: u64,
     ) -> Self {
         Self {
@@ -73,19 +76,24 @@ impl TorrentV2 {
         }
     }
 
-    pub fn from_metadata(
+    pub fn from_bencode(
         metadata: BencodeTorrent,
         info_hash: InfoHash,
     ) -> Result<TorrentV2, TorrentError> {
         let mut flat_files = Vec::new();
-        let mut total_size = 0u64;
+        let mut total_size = 0;
         let web_seeds = metadata.web_seeds();
 
-        // FIX is missing transform this into domain's file tree
-        if let Some(ref tree) = metadata.info.file_tree {
+        let file_tree = metadata.info.file_tree.as_ref().map(|tree| {
+            tree.iter()
+                .map(|(name, node)| (name.clone(), FileTreeNode::from(node)))
+                .collect::<HashMap<String, FileTreeNode>>()
+        });
+
+        if let Some(ref tree) = file_tree {
+            let mut path_buffer = Vec::new();
             for (name, node) in tree {
-                let mut path = vec![name.clone()];
-                total_size += Self::walk_and_flatten(node, &mut path, &mut flat_files);
+                total_size += Self::walk_and_flatten(name, node, &mut path_buffer, &mut flat_files);
             }
         }
 
@@ -103,45 +111,97 @@ impl TorrentV2 {
             },
             metadata.info.version,
             metadata.piece_layers,
-            None, // FIX it's none, must have value
-            flat_files,
+            file_tree,
+            Some(flat_files),
             total_size,
         ))
     }
 
     fn walk_and_flatten(
-        node: &BencodeFileTreeNode,
+        name: &str,
+        node: &FileTreeNode,
         current_path: &mut Vec<String>,
         out: &mut Vec<EmbededFile>,
     ) -> u64 {
-        match node {
-            BencodeFileTreeNode::File { entry } => {
-                let length = entry.length;
+        current_path.push(name.to_string());
+
+        let size = match node {
+            FileTreeNode::File { entry } => {
                 out.push(EmbededFile {
-                    length: length,
+                    length: entry.length,
                     path: current_path.clone(),
                     md5sum: None,
                 });
 
-                length as u64
+                entry.length as u64
             }
-            BencodeFileTreeNode::Dir(children) => {
+            FileTreeNode::Dir(children) => {
                 let mut dir_size = 0;
-                for (name, child) in children {
-                    current_path.push(name.clone());
-                    dir_size += Self::walk_and_flatten(&child, current_path, out);
-                    current_path.pop();
+
+                for (child_name, child_node) in children {
+                    dir_size += Self::walk_and_flatten(child_name, child_node, current_path, out);
                 }
 
                 dir_size
             }
+        };
+
+        current_path.pop();
+        size
+    }
+
+    fn check_integrity(&self, node: &FileTreeNode) -> Result<(), TorrentError> {
+        match node {
+            FileTreeNode::File { entry } => {
+                // if the file is smaller then the piece length
+                if entry.length <= self.piece_length() as i64 {
+                    return Ok(());
+                }
+
+                let Some(expected_root) = entry.pieces_root else {
+                    return Err(TorrentError::NotValid("missing piece root".into()));
+                };
+
+                let layers = self
+                    .piece_layers
+                    .get(&expected_root)
+                    .ok_or_else(|| TorrentError::NotValid("missing layer root".into()))?;
+
+                let merkle_tree = MerkleTree::from_piece_layers(&layers)?;
+
+                if merkle_tree.root != expected_root {
+                    return Err(TorrentError::NotValid(
+                        format!(
+                            "mismatch roots! Expected: {}, got {}",
+                            hex::encode(merkle_tree.root),
+                            hex::encode(expected_root)
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            FileTreeNode::Dir(files) => {
+                for file in files.values() {
+                    self.check_integrity(&file)?;
+                }
+            }
         }
+
+        Ok(())
     }
 }
 
 impl Integrity for TorrentV2 {
     fn validate(&self) -> Result<(), TorrentError> {
-        todo!()
+        let Some(file_tree) = self.file_tree.as_ref() else {
+            return Err(TorrentError::NotValid("file tree did not compose".into()));
+        };
+
+        for node in file_tree.values() {
+            self.check_integrity(node)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -180,7 +240,7 @@ impl Metainfo for TorrentV2 {
     }
 
     fn files(&self) -> &[EmbededFile] {
-        &self.flat_files
+        self.flat_files.as_deref().unwrap_or(&[])
     }
 
     fn web_seeds(&self) -> Option<&[String]> {

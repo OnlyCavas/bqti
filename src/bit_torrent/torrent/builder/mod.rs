@@ -2,11 +2,11 @@ use crate::{
     bit_torrent::{
         bencode::{self, BencodeTorrent},
         torrent::metainfo::{
-            InfoHash, InfoHashV1, TorrentError, TorrentFile,
-            v1::{TorrentV1, V1Mode},
+            InfoHash, InfoHashV1, InfoHashV2, TorrentError, TorrentFile, v1::TorrentV1,
+            v2::TorrentV2,
         },
     },
-    types::{ByteSize, PieceByte},
+    types::ByteSize,
 };
 
 mod v1_builder;
@@ -19,17 +19,12 @@ pub use v2_builder::V2Builder;
 pub struct TorrentBuilder {}
 
 impl TorrentBuilder {
-    pub fn with_v2() -> V2Builder {
-        V2Builder {}
+    pub fn with_v2(name: String, piece_length: ByteSize) -> V2Builder {
+        V2Builder::new(name, piece_length)
     }
 
-    pub fn with_v1(
-        name: String,
-        piece_length: ByteSize,
-        pieces: PieceByte,
-        mode: V1Mode,
-    ) -> V1Builder {
-        V1Builder::new(name, piece_length, pieces, mode)
+    pub fn with_v1(name: impl Into<String>, piece_length: ByteSize) -> V1Builder {
+        V1Builder::new(name, piece_length)
     }
 
     pub fn apply_from_metadata(metadata: BencodeTorrent) -> Result<TorrentFile, TorrentError> {
@@ -45,7 +40,12 @@ impl TorrentBuilder {
 
                 Ok(TorrentFile::V1(torrent))
             }
-            (false, true) => Err(TorrentError::Failed("not implemented yet".into())),
+            (false, true) => {
+                let info_hash = InfoHash::V2(InfoHashV2::new(&raw_hash));
+                let torrent = TorrentV2::from_bencode(metadata, info_hash)?;
+
+                Ok(TorrentFile::V2(torrent))
+            }
             (true, true) => Err(TorrentError::Unsupported(
                 "Hybrid v1+v2 not yet implemented".into(),
             )),
