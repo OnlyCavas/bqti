@@ -8,7 +8,8 @@ use crate::{
         torrent::{
             merkle::MerkleTree,
             metainfo::{
-                InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError, v1::EmbededFile,
+                InfoHash, Integrity, Metainfo, PieceLength, TorrentCommon, TorrentError,
+                v1::EmbededFile,
             },
         },
     },
@@ -103,7 +104,7 @@ impl TorrentV2 {
                 name: metadata.info.name,
                 announce: metadata.announce,
                 announce_list: metadata.announce_list,
-                piece_length: metadata.info.piece_length,
+                piece_length: PieceLength::from(metadata.info.piece_length),
                 creation_date: metadata.creation_date,
                 comment: metadata.comment,
                 created_by: metadata.created_by,
@@ -154,7 +155,7 @@ impl TorrentV2 {
         match node {
             FileTreeNode::File { entry } => {
                 // if the file is smaller then the piece length
-                if entry.length <= self.piece_length() as i64 {
+                if entry.length <= self.piece_length().0 as i64 {
                     return Ok(());
                 }
 
@@ -226,8 +227,8 @@ impl Metainfo for TorrentV2 {
         self.info.info_hash.as_ref()
     }
 
-    fn piece_length(&self) -> u64 {
-        self.info.piece_length as u64
+    fn piece_length(&self) -> PieceLength {
+        self.info.piece_length
     }
 
     fn total_size(&self) -> u64 {

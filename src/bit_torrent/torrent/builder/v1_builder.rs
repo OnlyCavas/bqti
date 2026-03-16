@@ -6,7 +6,8 @@ use crate::{
         torrent::{
             hasher::{PieceHasher, PieceHasherV1},
             metainfo::{
-                InfoHash, InfoHashV1, TorrentCommon, TorrentError, TorrentFile, v1::TorrentV1,
+                InfoHash, InfoHashV1, PieceLength, TorrentCommon, TorrentError, TorrentFile,
+                v1::TorrentV1,
             },
         },
         types::ByteSize,
@@ -18,7 +19,7 @@ use crate::{
 pub struct V1Builder {
     name: String,
     private: bool,
-    piece_length: ByteSize,
+    piece_length: PieceLength,
     paths: Vec<PathBuf>,
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
@@ -33,7 +34,7 @@ impl V1Builder {
     pub(crate) fn new(name: impl Into<String>, piece_length: ByteSize) -> Self {
         Self {
             name: name.into(),
-            piece_length,
+            piece_length: PieceLength::from(piece_length),
             paths: Vec::new(),
             private: false,
             announce: None,
@@ -133,7 +134,7 @@ impl V1Builder {
             self.name.clone(),
             private_flag,
             pieces.clone(),
-            self.piece_length,
+            self.piece_length.0 as i64,
             mode.clone(),
         );
 
@@ -144,7 +145,7 @@ impl V1Builder {
     }
 
     pub fn build(self) -> Result<TorrentFile, TorrentError> {
-        // TODO check the piece length, must be to the power of two
+        self.piece_length.validate()?;
 
         if self.paths.is_empty() {
             return Err(TorrentError::NotValid(
@@ -152,7 +153,7 @@ impl V1Builder {
             ));
         }
 
-        let mut hasher = PieceHasherV1::new(self.piece_length as usize);
+        let mut hasher = PieceHasherV1::new(self.piece_length.0 as usize);
         self.paths.iter().fold(&mut hasher, |h, p| h.file(p));
 
         let (pieces, mode) = hasher.finalize()?;

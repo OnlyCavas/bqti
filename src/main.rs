@@ -11,11 +11,11 @@ fn main() -> Result<(), BQTIError> {
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             SubCommand::Torrent { torrent } => match torrent {
-                Torrent::Inspect { torrent } => inspect(torrent, cli.verbose)?,
-                Torrent::Validate { torrent } => validate(torrent)?,
-                Torrent::Create(args) => create(args)?,
+                Torrent::Inspect { torrent } => inspect(torrent, cli.verbose),
+                Torrent::Validate { torrent } => validate(torrent),
+                Torrent::Create(args) => create(args),
             },
-        };
+        }?;
     }
 
     Ok(())

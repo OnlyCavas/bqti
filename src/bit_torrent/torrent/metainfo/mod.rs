@@ -11,7 +11,7 @@ use crate::{
             v2::TorrentV2,
         },
     },
-    types::{ByteSize, Hash2OBytes, Hash32Bytes, UnixDate},
+    types::{Hash2OBytes, Hash32Bytes, UnixDate},
 };
 
 pub mod v1;
@@ -48,7 +48,7 @@ pub trait Metainfo {
     fn name(&self) -> &str;
     fn version(&self) -> u8;
     fn info_hash(&self) -> &[u8];
-    fn piece_length(&self) -> u64;
+    fn piece_length(&self) -> PieceLength;
     fn total_size(&self) -> u64;
     fn is_private(&self) -> bool;
     fn files(&self) -> &[EmbededFile];
@@ -60,12 +60,11 @@ pub trait Metainfo {
     fn raw_pieces(&self) -> &[u8];
 
     fn num_pieces(&self) -> usize {
-        if self.piece_length() == 0 {
+        if self.piece_length() == PieceLength(0) {
             return 0;
         }
 
-        ((self.total_size() + (self.piece_length() as u64) - 1) / (self.piece_length() as u64))
-            as usize
+        ((self.total_size() + (self.piece_length().0) - 1) / (self.piece_length().0)) as usize
     }
 }
 
@@ -121,7 +120,7 @@ pub struct TorrentCommon {
     pub name: String,
     pub announce: Option<String>,
     pub announce_list: Option<Vec<Vec<String>>>,
-    pub piece_length: ByteSize,
+    pub piece_length: PieceLength,
     pub creation_date: Option<UnixDate>,
     pub comment: Option<String>,
     pub created_by: Option<String>,
@@ -134,7 +133,7 @@ impl TorrentCommon {
         name: String,
         announce: Option<String>,
         announce_list: Option<Vec<Vec<String>>>,
-        piece_length: ByteSize,
+        piece_length: PieceLength,
         creation_date: Option<UnixDate>,
         comment: Option<String>,
         created_by: Option<String>,
@@ -172,7 +171,7 @@ impl From<&TorrentFile> for BencodeInfo {
         BencodeInfo {
             name: value.name().to_string(),
             version: (value.version() != 1).then_some(value.version()),
-            piece_length: value.piece_length() as i64,
+            piece_length: value.piece_length().0 as i64,
             private: value.is_private().then_some(1),
             length,
             files,
@@ -196,5 +195,43 @@ impl From<&TorrentFile> for BencodeTorrent {
             HashMap::new(), // FIX missing the v2 impl
             HashMap::new(), // FIX missing the v2 impl
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PieceLength(pub u64);
+
+impl PieceLength {
+    pub fn validate(self) -> Result<(), TorrentError> {
+        let pl = self.0;
+        const MIN_LIMIT: u64 = 16 * 1024; // 16 kb
+        const MAX_LIMIT: u64 = 128 * 1024 * 1024; // 128 mb
+
+        if pl < MIN_LIMIT || pl > MAX_LIMIT {
+            return Err(TorrentError::NotValid(format!(
+                "invalid piece length {}",
+                pl
+            )));
+        }
+
+        if (pl & (pl - 1)) != 0 {
+            return Err(TorrentError::NotValid(
+                "piece of length must be to the power of 2".into(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+impl From<i64> for PieceLength {
+    fn from(value: i64) -> Self {
+        PieceLength(value as u64)
+    }
+}
+
+impl PartialEq<u64> for PieceLength {
+    fn eq(&self, other: &u64) -> bool {
+        self.0 == *other
     }
 }

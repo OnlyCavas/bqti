@@ -40,7 +40,10 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
     println!();
     println!("  {}", thin);
     println!("  📦 Name         {}", torrent.name());
-    println!("  🧩 Piece Length {}", format_size(torrent.piece_length()));
+    println!(
+        "  🧩 Piece Length {}",
+        format_size(torrent.piece_length().0)
+    );
 
     let files = torrent.files();
     match files.len() {

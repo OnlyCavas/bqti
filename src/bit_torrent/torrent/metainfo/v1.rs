@@ -1,7 +1,9 @@
 use crate::{
     bit_torrent::{
         bencode::{BencodeMode, BencodeTorrent, FileInfo},
-        torrent::metainfo::{InfoHash, Integrity, Metainfo, TorrentCommon, TorrentError},
+        torrent::metainfo::{
+            InfoHash, Integrity, Metainfo, PieceLength, TorrentCommon, TorrentError,
+        },
     },
     types::{ByteSize, PieceByte},
 };
@@ -109,7 +111,7 @@ impl TorrentV1 {
                 name: metadata.info.name,
                 announce: metadata.announce,
                 announce_list: metadata.announce_list,
-                piece_length: metadata.info.piece_length,
+                piece_length: PieceLength::from(metadata.info.piece_length),
                 creation_date: metadata.creation_date,
                 comment: metadata.comment,
                 created_by: metadata.created_by,
@@ -127,23 +129,8 @@ impl Integrity for TorrentV1 {
         let total_size = self.total_size();
         let pl_len = self.piece_length();
 
-        const MIN_LIMIT: u64 = 16 * 1024; // 16 kb
-        const MAX_LIMIT: u64 = 128 * 1024 * 1024; // 128 mb
-
-        if pl_len < MIN_LIMIT || pl_len > MAX_LIMIT {
-            return Err(TorrentError::NotValid(format!(
-                "invalid piece length {}",
-                pl_len
-            )));
-        }
-
-        if (pl_len & (pl_len - 1)) != 0 {
-            return Err(TorrentError::NotValid(
-                "piece of length must be to the power of 2".into(),
-            ));
-        }
-
-        let expected_pieces = (total_size + pl_len - 1) / pl_len;
+        pl_len.validate()?;
+        let expected_pieces = (total_size + pl_len.0 - 1) / pl_len.0;
 
         if self.pieces.len() % 20 != 0 {
             return Err(TorrentError::NotValid("the pieces exceed 20 bytes".into()));
@@ -186,8 +173,8 @@ impl Metainfo for TorrentV1 {
         self.info.info_hash.as_ref()
     }
 
-    fn piece_length(&self) -> u64 {
-        self.info.piece_length as u64
+    fn piece_length(&self) -> PieceLength {
+        self.info.piece_length
     }
 
     fn total_size(&self) -> u64 {
