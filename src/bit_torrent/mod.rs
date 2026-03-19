@@ -5,6 +5,9 @@ use crate::bit_torrent::{
 
 mod bencode;
 mod error;
+
+pub mod network;
+mod session;
 pub mod torrent;
 pub mod types;
 

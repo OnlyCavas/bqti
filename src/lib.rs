@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate tracing;
+
 mod bit_torrent;
 mod commands;
 mod error;
