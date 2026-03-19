@@ -19,7 +19,7 @@ pub use v2_builder::V2Builder;
 pub struct TorrentBuilder {}
 
 impl TorrentBuilder {
-    pub fn with_v2(name: String, piece_length: ByteSize) -> V2Builder {
+    pub fn with_v2(name: impl Into<String>, piece_length: ByteSize) -> V2Builder {
         V2Builder::new(name, piece_length)
     }
 

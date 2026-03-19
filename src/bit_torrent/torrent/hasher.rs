@@ -1,5 +1,5 @@
 use crossbeam::channel::{self, Sender};
-use sha1::{Digest, Sha1};
+use sha1::{ Digest, Sha1};
 use std::{fs::File, io::Read, path::PathBuf};
 
 use crate::{
