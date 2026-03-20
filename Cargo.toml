@@ -26,3 +26,5 @@ rustls = { version = "0.23.37", features = ["aws-lc-rs", "ring"] }
 rustls-pki-types = "1.14.0"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 futures = "0.3.32"
+directories = "6.0.0"
+anyhow = "1.0.102"

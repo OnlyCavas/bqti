@@ -1,15 +1,32 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use ::futures::future::join_all;
+use anyhow::Result;
+use quinn::{ConnectError, ConnectionError};
+use thiserror::Error;
 use tokio::{
     sync::{RwLock, mpsc},
-    task::JoinHandle,
     time::timeout,
 };
 
+#[derive(Debug, Error)]
+pub enum ConnectionManagerError {
+    #[error(transparent)]
+    ConnectError(#[from] ConnectError),
+
+    #[error(transparent)]
+    QuicConnectionError(#[from] ConnectionError),
+
+    #[error(transparent)]
+    ConnectionError(#[from] connection::ConnectionError),
+
+    #[error("failed to establish a connection, with {0}")]
+    EstablishError(String),
+}
+
 use crate::network::{
     config::QuicEndpointBuilder,
-    connection::{Connection, OnDisconnect},
+    connection::{self, Connection, OnDisconnect},
     message::Message,
     peer::Peer,
 };
@@ -45,10 +62,11 @@ impl ConnectionManager {
     pub fn new(
         tls_endpoint: QuicEndpointBuilder,
         options: ManagerOptions,
-    ) -> Result<(Self, mpsc::Receiver<Message>), Box<dyn std::error::Error>> {
+    ) -> Result<(Self, mpsc::Receiver<Message>)> {
         let (tx, stream_rx) = mpsc::channel::<Message>(CHANNEL_BUFFER_SIZE);
 
         let endpoint = tls_endpoint.build()?;
+
         let manager = Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             endpoint,
@@ -75,7 +93,7 @@ impl ConnectionManager {
         &self,
         peer_id: String,
         connection: Connection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), ConnectionManagerError> {
         let mut conns = self.connections.write().await;
 
         if conns.contains_key(&peer_id) {
@@ -131,7 +149,7 @@ impl ConnectionManager {
         }
     }
 
-    pub async fn connect(&self, peer: &Peer) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {
         // TODO if a peer is already register, it must re-use the same connection and perhaps
         // multiplex dht, pex, standard, keep alive, etc...
         let on_disconnect = self.on_disconnect_handler();
@@ -148,13 +166,13 @@ impl ConnectionManager {
         Ok(())
     }
 
-    pub async fn send(&self, peer: &Peer, msg: Message) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send(&self, peer: &Peer, msg: Message) -> Result<(), ConnectionManagerError> {
         let conns = self.connections.read().await;
         let peer_id = peer.address.to_string();
 
         let Some(conn) = conns.get(&peer_id) else {
             error!("failed to send message");
-            return Err(format!("failed to establish a connection with {}", peer_id).into());
+            return Err(ConnectionManagerError::EstablishError(peer_id));
         };
 
         conn.send_message(msg).await?;

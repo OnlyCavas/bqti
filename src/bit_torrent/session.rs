@@ -1,6 +1,6 @@
 use crate::{
     bit_torrent::torrent::metainfo::{InfoHash, TorrentFile},
-    network::manager::ConnectionManager,
+    network::ConnectionManager,
 };
 
 pub struct TorrentSession {

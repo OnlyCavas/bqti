@@ -1,10 +1,13 @@
-pub mod certs;
-pub mod config;
-pub mod connection;
-pub mod manager;
-pub mod message;
-pub mod peer;
+mod certs;
+mod config;
+mod connection;
+mod manager;
+mod message;
+mod peer;
 
-// TODO functions for loading and storing certificates
-// TODO make a util function that stores at ~/.local/share/bqti
-// TODO seggregate modules and functions
+pub use certs::{Cert, CertError, LeafCert, RootCA};
+pub use config::QuicEndpointBuilder;
+pub use connection::{Connection, ConnectionError, OnDisconnect, QuicServerOpts};
+pub use manager::{ConnectionManager, ConnectionManagerError, ManagerOptions};
+pub use message::Message;
+pub use peer::{Peer, PeerError};

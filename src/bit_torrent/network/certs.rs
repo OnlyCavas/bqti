@@ -3,9 +3,18 @@ use rcgen::{
     SignatureAlgorithm,
 };
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use tokio::fs;
+use thiserror::Error;
 
 const DEFAULT_SIGN_ALGORITM: &SignatureAlgorithm = &rcgen::PKCS_ECDSA_P256_SHA256;
+
+#[derive(Debug, Error)]
+pub enum CertError {
+    #[error("")]
+    Failed(),
+
+    #[error(transparent)]
+    Rcgen(#[from] rcgen::Error),
+}
 
 pub struct Cert {
     cert: CertificateDer<'static>,
@@ -45,24 +54,29 @@ pub struct RootCA {
 }
 
 impl RootCA {
-    pub async fn load_or_generate(
-        ca_root_path: &str,
-        pk_root_path: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        if fs::try_exists(ca_root_path).await? && fs::try_exists(pk_root_path).await? {
-            let ca_bytes = fs::read(ca_root_path).await?;
-            let pk_bytes = fs::read(pk_root_path).await?;
+    // pub async fn load_or_generate(
+    //     ca_root_path: &str,
+    //     pk_root_path: &str,
+    // ) -> Result<Self, Box<dyn std::error::Error>> {
+    //     if fs::try_exists(ca_root_path).await? && fs::try_exists(pk_root_path).await? {
+    //         let ca_bytes = fs::read(ca_root_path).await?;
+    //         let pk_bytes = fs::read(pk_root_path).await?;
+    //
+    //         let cert = Cert::from_bytes_der(&ca_bytes, &pk_bytes)?;
+    //
+    //         info!("loading ca root");
+    //         return Ok(RootCA { cert });
+    //     }
+    //
+    //     // Self::generate()
+    // }
 
-            let cert = Cert::from_bytes_der(&ca_bytes, &pk_bytes)?;
-
-            info!("loading ca root");
-            return Ok(RootCA { cert });
-        }
-
-        Self::generate()
+    pub fn from_bytes(cert_bytes: Vec<u8>, pk_bytes: Vec<u8>) -> Result<RootCA, CertError> {
+        let cert = Cert::from_bytes_der(&cert_bytes, &pk_bytes)?;
+        Ok(RootCA { cert })
     }
 
-    pub fn generate() -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn generate() -> Result<Self, CertError> {
         let mut params = CertificateParams::default();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
 
@@ -72,7 +86,8 @@ impl RootCA {
         params.distinguished_name = dn;
 
         let key_pair = KeyPair::generate_for(&DEFAULT_SIGN_ALGORITM)?;
-        let cert = CertificateDer::from(params.self_signed(&key_pair)?.der().to_vec());
+        let parms = params.self_signed(&key_pair)?;
+        let cert = CertificateDer::from(parms.der().to_vec());
 
         Ok(Self {
             cert: Cert {
@@ -88,10 +103,7 @@ pub struct LeafCert {
 }
 
 impl LeafCert {
-    pub fn generate(
-        alt_names: impl Into<Vec<String>>,
-        issuer: &RootCA,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn generate(alt_names: impl Into<Vec<String>>, issuer: &RootCA) -> Result<Self, CertError> {
         let alt_names = alt_names.into();
 
         let mut params = CertificateParams::new(alt_names.clone())?;

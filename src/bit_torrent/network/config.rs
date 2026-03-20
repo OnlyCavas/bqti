@@ -4,6 +4,8 @@ use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use rustls::crypto::CryptoProvider;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
+use anyhow::Result;
+
 pub struct QuicEndpointBuilder {
     addr: SocketAddr,
     transport_config: quinn::TransportConfig,
@@ -35,7 +37,7 @@ impl QuicEndpointBuilder {
         self
     }
 
-    fn server_crypto(&self) -> Result<rustls::ServerConfig, Box<dyn std::error::Error>> {
+    fn server_crypto(&self) -> Result<rustls::ServerConfig> {
         let mut server_crypto =
             rustls::ServerConfig::builder_with_provider(self.crypto_provider.clone())
                 .with_safe_default_protocol_versions()?
@@ -47,7 +49,7 @@ impl QuicEndpointBuilder {
         Ok(server_crypto)
     }
 
-    fn client_crypto(&self) -> Result<rustls::ClientConfig, Box<dyn std::error::Error>> {
+    fn client_crypto(&self) -> Result<rustls::ClientConfig> {
         let mut root_store = rustls::RootCertStore::empty();
         root_store.add_parsable_certificates(self.certs.clone());
 
@@ -62,7 +64,7 @@ impl QuicEndpointBuilder {
         Ok(client_crypto)
     }
 
-    pub fn build(self) -> Result<quinn::Endpoint, Box<dyn std::error::Error>> {
+    pub fn build(self) -> Result<quinn::Endpoint> {
         let server_crypto = self.server_crypto()?;
         let client_crypto = self.client_crypto()?;
 

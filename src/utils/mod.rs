@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::bit_torrent::torrent::metainfo::Metainfo;
+
 pub mod bqti;
+pub mod certs;
 
 pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
     let divider = "─".repeat(60);

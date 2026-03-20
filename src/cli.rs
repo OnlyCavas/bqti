@@ -1,5 +1,10 @@
-use clap::{Args, Parser, Subcommand, ValueHint};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
+
+use crate::{
+    commands::{connect::ConnectArgs, serve::ServeArgs},
+    torrent::Torrent,
+};
 
 #[derive(Parser)]
 #[command(version, about = "BQTI - BitTorrent+QUIC+TEE+I2P")]
@@ -13,22 +18,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum SubCommand {
-    Gen,
-    Serve {
-        #[arg(short, long)]
-        addr: String,
-
-        #[arg(short, long)]
-        to: String,
-    },
-    Connect {
-        #[arg(short, long)]
-        addr: String,
-
-        #[arg(short, long)]
-        to: String,
-    },
-
+    Serve(ServeArgs),
+    Connect(ConnectArgs),
     Torrent {
         #[command(subcommand)]
         torrent: Torrent,
@@ -89,17 +80,4 @@ pub struct CreateArgs {
 
 fn parse_tier(s: &str) -> Result<Vec<String>, String> {
     Ok(s.split(',').map(String::from).collect())
-}
-
-#[derive(Subcommand)]
-pub enum Torrent {
-    Create(CreateArgs),
-    Inspect {
-        #[arg(value_hint = ValueHint::FilePath)]
-        torrent: PathBuf,
-    },
-    Validate {
-        #[arg(value_hint = ValueHint::FilePath)]
-        torrent: PathBuf,
-    },
 }
