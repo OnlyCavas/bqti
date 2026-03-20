@@ -6,8 +6,10 @@ use quinn::{ConnectError, ConnectionError};
 use thiserror::Error;
 use tokio::{
     sync::{RwLock, mpsc},
+    task::JoinSet,
     time::timeout,
 };
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
 pub enum ConnectionManagerError {
@@ -90,62 +92,66 @@ impl ConnectionManager {
     }
 
     async fn add_peer(
-        &self,
+        connections: &Arc<RwLock<HashMap<String, Connection>>>,
         peer_id: String,
         connection: Connection,
-    ) -> Result<(), ConnectionManagerError> {
-        let mut conns = self.connections.write().await;
+    ) {
+        let mut conns = connections.write().await;
 
         if conns.contains_key(&peer_id) {
-            info!(
-                "peer it's already connected, terminating connection...: {}",
-                peer_id
-            );
-
-            return Ok(());
+            info!("peer already connected: {}", peer_id);
+            return;
         }
 
         conns.insert(peer_id, connection);
-        Ok(())
     }
 
-    // FIX server doesn't shutdown, mainly because of the connection.write at the end
-    pub async fn start_listening(&self) {
-        while let Some(incoming) = self.endpoint.accept().await {
-            let handshake_timeout = self.options.handshake_timeout;
+    pub async fn start_listening(&self, cancel: CancellationToken) {
+        let mut join_handle = JoinSet::new();
 
-            if self.endpoint.open_connections() >= self.options.max_connections {
-                info!("max connections reached: {}", self.options.max_connections);
-                incoming.refuse();
-                continue;
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    join_handle.shutdown().await;
+                    break;
+                },
+                Some(incoming) = async {  self.endpoint.accept().await} => {
+                    let handshake_timeout = self.options.handshake_timeout;
+
+                    if self.endpoint.open_connections() >= self.options.max_connections {
+                        info!("max connections reached: {}", self.options.max_connections);
+                        incoming.refuse();
+                        continue;
+                    }
+
+                    let on_disconnect = self.on_disconnect_handler();
+                    let connections = self.connections.clone();
+                    let dispatcher = self.message_tx.clone();
+
+                    join_handle.spawn(async move {
+                        let conn_result = timeout(handshake_timeout, incoming).await;
+
+                        let Ok(Ok(conn)) = conn_result else {
+                            warn!(
+                                "handshake failed, timout of {} seconds exceeded",
+                                handshake_timeout.as_secs()
+                            );
+                            return;
+                        };
+
+                        let peer_id = conn.remote_address().to_string();
+
+                        let Ok(connection) =
+                            Connection::spawn(peer_id.clone(), conn, dispatcher, on_disconnect).await
+                        else {
+                            error!("failed to listen to new connections");
+                            return;
+                        };
+
+                        Self::add_peer(&connections, peer_id, connection).await;
+                    });
+                }
             }
-
-            let on_disconnect = self.on_disconnect_handler();
-            let connections = self.connections.clone();
-            let dispatcher = self.message_tx.clone();
-
-            let _handle = tokio::spawn(async move {
-                let conn_result = timeout(handshake_timeout, incoming).await;
-
-                let Ok(Ok(conn)) = conn_result else {
-                    warn!(
-                        "handshake failed, timout of {} seconds exceeded",
-                        handshake_timeout.as_secs()
-                    );
-                    return;
-                };
-
-                let peer_id = conn.remote_address().to_string();
-
-                let Ok(connection) =
-                    Connection::spawn(peer_id.clone(), conn, dispatcher, on_disconnect).await
-                else {
-                    error!("failed to listen to new connections");
-                    return;
-                };
-
-                connections.write().await.insert(peer_id, connection);
-            });
         }
     }
 
@@ -161,7 +167,7 @@ impl ConnectionManager {
         let connection =
             Connection::spawn(peer_id.clone(), conn, dispatcher, on_disconnect).await?;
 
-        self.add_peer(peer_id, connection).await?;
+        Self::add_peer(&self.connections, peer_id, connection).await;
 
         Ok(())
     }

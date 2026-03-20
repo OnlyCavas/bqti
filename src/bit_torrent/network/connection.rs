@@ -35,6 +35,23 @@ pub struct Connection {
 }
 
 impl Connection {
+    fn connection_span(connection: &quinn::Connection) -> tracing::Span {
+        let protocol = connection
+            .handshake_data()
+            .and_then(|d| d.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+            .and_then(|d| d.protocol)
+            .map_or_else(
+                || "<none>".into(),
+                |x| String::from_utf8_lossy(&x).into_owned(),
+            );
+
+        info_span!(
+            "connection",
+            remote = %connection.remote_address(),
+            protocol = %protocol
+        )
+    }
+
     pub async fn spawn(
         peer: String,
         connection: quinn::Connection,
@@ -44,13 +61,16 @@ impl Connection {
         let peer_id = peer.clone();
         let connection_tx = connection.clone();
 
-        let handle = tokio::spawn(async move {
-            if let Err(e) = Self::handle_connection(connection_tx, dispatcher).await {
-                error!("connection failed: {}", e);
-            }
+        let handle = tokio::spawn(
+            async move {
+                if let Err(e) = Self::handle_connection(connection_tx, dispatcher).await {
+                    error!("connection failed: {}", e);
+                }
 
-            on_disconnect(peer_id);
-        });
+                on_disconnect(peer_id);
+            }
+            .instrument(Self::connection_span(&connection)),
+        );
 
         Ok(Self { connection, handle })
     }
@@ -59,17 +79,6 @@ impl Connection {
         connection: quinn::Connection,
         stream_dispatch: mpsc::Sender<Message>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let span = info_span!(
-            "connection",
-            remote = %connection.remote_address(),
-            protocol = %connection
-                .handshake_data()
-                .unwrap()
-                .downcast::<quinn::crypto::rustls::HandshakeData>().unwrap()
-                .protocol
-                .map_or_else(|| "<none>".into(), |x| String::from_utf8_lossy(&x).into_owned())
-        );
-
         async {
             info!("connection established");
 
@@ -94,7 +103,7 @@ impl Connection {
                 });
             }
         }
-        .instrument(span)
+        .instrument(Self::connection_span(&connection))
         .await?;
 
         Ok(())

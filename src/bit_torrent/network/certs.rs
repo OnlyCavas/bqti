@@ -54,23 +54,6 @@ pub struct RootCA {
 }
 
 impl RootCA {
-    // pub async fn load_or_generate(
-    //     ca_root_path: &str,
-    //     pk_root_path: &str,
-    // ) -> Result<Self, Box<dyn std::error::Error>> {
-    //     if fs::try_exists(ca_root_path).await? && fs::try_exists(pk_root_path).await? {
-    //         let ca_bytes = fs::read(ca_root_path).await?;
-    //         let pk_bytes = fs::read(pk_root_path).await?;
-    //
-    //         let cert = Cert::from_bytes_der(&ca_bytes, &pk_bytes)?;
-    //
-    //         info!("loading ca root");
-    //         return Ok(RootCA { cert });
-    //     }
-    //
-    //     // Self::generate()
-    // }
-
     pub fn from_bytes(cert_bytes: Vec<u8>, pk_bytes: Vec<u8>) -> Result<RootCA, CertError> {
         let cert = Cert::from_bytes_der(&cert_bytes, &pk_bytes)?;
         Ok(RootCA { cert })

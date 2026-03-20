@@ -1,6 +1,9 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+use quinn::{
+    IdleTimeout,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
+};
 use rustls::crypto::CryptoProvider;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
@@ -22,6 +25,7 @@ impl QuicEndpointBuilder {
     ) -> Self {
         let mut transport_config = quinn::TransportConfig::default();
         transport_config.keep_alive_interval(Some(Duration::from_secs(10)));
+        transport_config.max_idle_timeout(Some(IdleTimeout::from(quinn::VarInt::from_u32(60_000))));
 
         Self {
             addr,

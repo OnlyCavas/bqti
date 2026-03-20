@@ -11,7 +11,7 @@ pub enum PeerError {
 // TODO generate peer id, hash 20 or 32?
 pub struct Peer {
     pub id: String,
-    pub address: SocketAddr, // identitier inside quic
+    pub address: SocketAddr,
 }
 
 impl Peer {

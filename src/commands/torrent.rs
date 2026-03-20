@@ -87,7 +87,7 @@ pub fn create(args: CreateArgs) -> Result<()> {
     })?;
 
     save(path_str, &torrent)?;
-    info!("Torrent criado com sucesso em: {}", path_str);
+    info!("torrent created at: {}", path_str);
     Ok(())
 }
 

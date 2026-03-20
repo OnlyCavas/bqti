@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     network::{ConnectionManager, LeafCert, ManagerOptions, Message, Peer, QuicEndpointBuilder},
@@ -33,24 +34,34 @@ pub async fn run(args: ServeArgs) -> Result<()> {
 
     let (manager, mut stream_rx) =
         ConnectionManager::new(endpoint_config, ManagerOptions::default())?;
+    let cancelation_token = CancellationToken::new();
 
     let manager_tx = manager.clone();
+    let cancel_tx = cancelation_token.clone();
 
     tokio::spawn(async move {
-        manager_tx.start_listening().await;
+        manager_tx.start_listening(cancel_tx).await;
     });
 
-    while let Some(message) = stream_rx.recv().await {
-        match message {
-            Message::KeepAlive => info!("keep alive"),
-            Message::DHT(payload) => info!("dht: {}", hex::encode(payload)),
-            Message::PEX(payload) => info!("pex: {}", hex::encode(payload)),
-            Message::Standard(payload) => info!("bit: {}", hex::encode(payload)),
+    loop {
+        tokio::select! {
+            Some(message) = stream_rx.recv() => {
+                match message {
+                    Message::KeepAlive => info!("keep alive"),
+                    Message::DHT(payload) => info!("dht: {}", hex::encode(payload)),
+                    Message::PEX(payload) => info!("pex: {}", hex::encode(payload)),
+                    Message::Standard(payload) => info!("bit: {}", hex::encode(payload)),
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
         }
     }
 
-    tokio::signal::ctrl_c().await?;
+    cancelation_token.cancel();
     manager.shutdown().await;
 
     Ok(())
 }
+
