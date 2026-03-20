@@ -1,6 +1,13 @@
-use crate::bit_torrent::{network::session::PeerSession, torrent::metainfo::InfoHash};
+use crate::{
+    bit_torrent::torrent::metainfo::{InfoHash, TorrentFile},
+    network::manager::ConnectionManager,
+};
 
 pub struct TorrentSession {
     pub info_hash: InfoHash,
-    pub peers: Vec<PeerSession>,
+    pub manager: ConnectionManager,
+}
+
+impl TorrentSession {
+    fn from_torrent(_torrent: TorrentFile) {}
 }

@@ -13,6 +13,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum SubCommand {
+    Gen,
     Serve {
         #[arg(short, long)]
         addr: String,
@@ -20,6 +21,14 @@ pub enum SubCommand {
         #[arg(short, long)]
         to: String,
     },
+    Connect {
+        #[arg(short, long)]
+        addr: String,
+
+        #[arg(short, long)]
+        to: String,
+    },
+
     Torrent {
         #[command(subcommand)]
         torrent: Torrent,

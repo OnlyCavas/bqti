@@ -70,7 +70,7 @@ pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
     })?;
 
     save(path_str, &torrent)?;
-    println!("Torrent criado com sucesso em: {}", path_str);
+    info!("Torrent criado com sucesso em: {}", path_str);
     Ok(())
 }
 
@@ -89,7 +89,7 @@ pub fn validate(torrent: PathBuf) -> Result<(), BQTIError> {
 
     match torrent.validate() {
         Ok(_) => {
-            println!(".torrent metadata file is valid!");
+            info!(".torrent metadata file is valid!");
             Ok(())
         }
         Err(e) => Err(BQTIError::BitTorrent(BitTorrentError::Torrent(e))),

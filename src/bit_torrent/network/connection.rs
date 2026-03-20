@@ -1,99 +1,182 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use quinn::{ClientConfig, Connection, RecvStream, SendStream};
-use quinn::{Endpoint, ServerConfig};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use tokio::sync::mpsc;
-use tokio::time::timeout;
+use quinn::{RecvStream, SendStream};
+use thiserror::Error;
+use tokio::{sync::mpsc, task::JoinHandle};
+use tracing::Instrument;
 
-use crate::bit_torrent::network::peer::Peer;
+use crate::network::message::Message;
 
-pub type StreamPair = (SendStream, RecvStream);
+pub type OnDisconnect = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
-#[async_trait::async_trait]
-pub trait Connector {
-    async fn connect(
-        &self,
-        peer: Peer,
-    ) -> Result<(Connection, mpsc::Receiver<StreamPair>), Box<dyn std::error::Error>>;
+#[derive(Error, Debug)]
+pub enum ConnectionError {
+    #[error("message too big: {0} bytes")]
+    MessageLimit(u32),
+
+    #[error("Erro de rede (IO): {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("O canal interno de mensagens fechou")]
+    DispatcherClosed,
+
+    #[error("Erro no protocolo BitTorrent: {0}")]
+    Protocol(String),
 }
 
-pub struct QuicManager {
-    endpoint: Endpoint,
+#[derive(Default)]
+pub struct QuicServerOpts {
+    pub connection_limit: Option<usize>,
 }
 
-impl QuicManager {
-    // FIX is missing create correctly the root CA to establish connection between two peers
-    // FIX maybe remove one tokio::spawn at connection.rs
-    pub fn new(addr: SocketAddr) -> Result<Self, Box<dyn std::error::Error>> {
-        let crypto_provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-
-        let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
-
-        let cert_der = CertificateDer::from(cert.der().to_vec());
-
-        let key_bytes = signing_key.serialize_der();
-        let priv_key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key_bytes));
-
-        let mut server_crypto =
-            rustls::ServerConfig::builder_with_provider(crypto_provider.clone())
-                .with_safe_default_protocol_versions()?
-                .with_no_client_auth()
-                .with_single_cert(vec![cert_der], priv_key)?;
-
-        server_crypto.alpn_protocols = vec![b"bittorrent-quic".to_vec()];
-        let server_config = ServerConfig::with_crypto(Arc::new(
-            quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
-        ));
-
-        let mut client_crypto = rustls::ClientConfig::builder_with_provider(crypto_provider)
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(rustls::RootCertStore::empty())
-            .with_no_client_auth();
-
-        client_crypto.alpn_protocols = vec![b"bittorrent-quic".to_vec()];
-        let client_config = ClientConfig::new(Arc::new(
-            quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)?,
-        ));
-
-        let mut endpoint = Endpoint::server(server_config, addr)?;
-        endpoint.set_default_client_config(client_config);
-
-        Ok(Self { endpoint })
-    }
+pub struct Connection {
+    connection: quinn::Connection,
+    handle: JoinHandle<()>,
 }
 
-#[async_trait::async_trait]
-impl Connector for QuicManager {
-    async fn connect(
-        &self,
-        peer: Peer,
-    ) -> Result<(Connection, mpsc::Receiver<StreamPair>), Box<dyn std::error::Error>> {
-        let endpoint = self.endpoint.connect(peer.address, &peer.id)?;
+impl Connection {
+    pub async fn spawn(
+        peer: String,
+        connection: quinn::Connection,
+        dispatcher: mpsc::Sender<Message>,
+        on_disconnect: OnDisconnect,
+    ) -> Result<Self, ConnectionError> {
+        let peer_id = peer.clone();
+        let connection_tx = connection.clone();
 
-        info!("listening");
-        let connection = timeout(Duration::from_secs(5), endpoint).await??;
-
-        info!("nevermind");
-        let (tx, rx) = mpsc::channel::<StreamPair>(32);
-
-        let handle = connection.clone();
-        tokio::spawn(async move {
-            loop {
-                match handle.accept_bi().await {
-                    Ok(streams) => {
-                        if tx.send(streams).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
+        let handle = tokio::spawn(async move {
+            if let Err(e) = Self::handle_connection(connection_tx, dispatcher).await {
+                error!("connection failed: {}", e);
             }
+
+            on_disconnect(peer_id);
         });
 
-        Ok((connection, rx))
+        Ok(Self { connection, handle })
+    }
+
+    async fn handle_connection(
+        connection: quinn::Connection,
+        stream_dispatch: mpsc::Sender<Message>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let span = info_span!(
+            "connection",
+            remote = %connection.remote_address(),
+            protocol = %connection
+                .handshake_data()
+                .unwrap()
+                .downcast::<quinn::crypto::rustls::HandshakeData>().unwrap()
+                .protocol
+                .map_or_else(|| "<none>".into(), |x| String::from_utf8_lossy(&x).into_owned())
+        );
+
+        async {
+            info!("connection established");
+
+            loop {
+                let stream = connection.accept_bi().await;
+
+                let stream = match stream {
+                    Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
+                        info!("connection closed");
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                    Ok(stream) => stream,
+                };
+
+                let stream_dispatch = stream_dispatch.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = Self::handle_request(stream.0, stream.1, stream_dispatch).await
+                    {
+                        warn!("failed to handle stream: {}", e);
+                    }
+                });
+            }
+        }
+        .instrument(span)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn handle_request(
+        _send: SendStream,
+        mut recv: RecvStream,
+        message_dispatcher: mpsc::Sender<Message>,
+    ) -> Result<(), ConnectionError> {
+        loop {
+            let mut len_bytes = [0u8; 4];
+
+            recv.read_exact(&mut len_bytes)
+                .await
+                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+            let length = u32::from_be_bytes(len_bytes);
+
+            if length == 0 {
+                message_dispatcher
+                    .send(Message::KeepAlive)
+                    .await
+                    .map_err(|_| ConnectionError::DispatcherClosed)?;
+
+                return Ok(());
+            }
+
+            if length > 1024 * 1024 {
+                return Err(ConnectionError::MessageLimit(length));
+            }
+
+            let mut id_bytes = [0u8; 1];
+            recv.read_exact(&mut id_bytes)
+                .await
+                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+            let message_id = id_bytes[0];
+
+            let payload_len = (length - 1) as usize;
+            let mut payload_bytes = vec![0u8; payload_len];
+
+            recv.read_exact(&mut payload_bytes)
+                .await
+                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+            let message = Message::from_bytes(message_id, &payload_bytes)
+                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+            if let Err(e) = message_dispatcher.send(message).await {
+                warn!("failed to dispatch... {}", e);
+                return Err(ConnectionError::DispatcherClosed);
+            }
+        }
+    }
+
+    pub async fn close(self) -> Result<(), ConnectionError> {
+        self.connection.close(0u32.into(), b"procedural shutdown");
+
+        self.handle
+            .await
+            .map_err(|_| ConnectionError::DispatcherClosed)?;
+
+        Ok(())
+    }
+
+    pub async fn send_message(&self, msg: Message) -> Result<(), ConnectionError> {
+        let (mut send, _) = self
+            .connection
+            .open_bi()
+            .await
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        let bytes = msg.to_bytes();
+
+        send.write_all(&bytes)
+            .await
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        send.finish()
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        Ok(())
     }
 }
