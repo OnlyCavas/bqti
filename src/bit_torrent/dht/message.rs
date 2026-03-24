@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{collections::HashSet, net::SocketAddr};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -19,6 +19,9 @@ pub enum DhtMessageError {
 
     #[error("invalid payload")]
     InvalidPayload,
+
+    #[error("failed to persist data")]
+    StoreFail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,9 +50,25 @@ impl<T: for<'de> Deserialize<'de>> RpcEnvelope<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum KademliaData {
+    Peers(HashSet<SocketAddr>),
+    Value(Vec<u8>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtRequest {
-    Ping { node_id: Key },
-    FindNode { node_id: Key, lookup_id: Key },
+    Ping {
+        sender_id: Key,
+    },
+    FindNode {
+        sender_id: Key,
+        lookup_id: Key,
+    },
+    Store {
+        sender_id: Key,
+        key: Key,
+        data: KademliaData,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,10 +86,10 @@ impl From<&PeerResponse> for Node {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtResponse {
     Pong {
-        node_id: Key,
+        receiver_id: Key,
     },
     Peers {
-        node_id: Key,
+        receiver_id: Key,
         peers: Vec<PeerResponse>,
     },
 }

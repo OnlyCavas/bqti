@@ -12,7 +12,9 @@ use tokio::sync::RwLock;
 use crate::{
     dht::{
         Key, Node, OrdDistance, RequestId, RpcError,
-        message::{DhtMessageError, DhtRequest, DhtResponse, PeerResponse, RpcRequest},
+        message::{
+            DhtMessageError, DhtRequest, DhtResponse, KademliaData, PeerResponse, RpcRequest,
+        },
         node,
         route_table::{KBUCKET_MAX, RouteTable},
         rpc::RpcHandler,
@@ -25,6 +27,9 @@ pub enum KademliaError {
     #[error(transparent)]
     NodeError(#[from] node::NodeError),
 
+    #[error("failed to find closest nodes")]
+    NoNodesFound(),
+
     #[error(transparent)]
     ConnectionError(#[from] ConnectionManagerError),
 
@@ -33,11 +38,6 @@ pub enum KademliaError {
 
     #[error(transparent)]
     RpcError(#[from] RpcError),
-}
-
-pub enum KademliaData {
-    Peers(HashSet<SocketAddr>),
-    Value(Vec<u8>),
 }
 
 pub struct Kademlia {
@@ -71,14 +71,17 @@ impl Kademlia {
             .rpc_handler
             .request(
                 target,
-                DhtRequest::Ping { node_id: host_id },
+                DhtRequest::Ping { sender_id: host_id },
                 Duration::from_secs(5),
             )
             .await?;
 
         info!("pong");
 
-        let DhtResponse::Pong { node_id: target_id } = result else {
+        let DhtResponse::Pong {
+            receiver_id: target_id,
+        } = result
+        else {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
@@ -195,7 +198,7 @@ impl Kademlia {
             .request(
                 target,
                 DhtRequest::FindNode {
-                    node_id: host_id,
+                    sender_id: host_id,
                     lookup_id: lookup_key,
                 },
                 Duration::from_secs(5),
@@ -203,7 +206,7 @@ impl Kademlia {
             .await?;
 
         let DhtResponse::Peers {
-            node_id: sender_id,
+            receiver_id: sender_id,
             peers,
         } = result
         else {
@@ -215,15 +218,74 @@ impl Kademlia {
         }
 
         let nodes = peers.iter().map(Node::from).collect::<Vec<_>>();
+
         Ok(nodes)
     }
 
-    // TODO implement store
     // TODO implement publish_torrent -> store for Info Hash (inside bqti)
+    pub async fn store(&self, key: Key, value: KademliaData) -> Result<(), KademliaError> {
+        let closest_nodes = self.node_lookup(&key).await?;
 
-    // TODO implement find_nodes
+        if closest_nodes.is_empty() {
+            return Err(KademliaError::NoNodesFound());
+        }
+
+        let mut future_stores = FuturesUnordered::new();
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        for target in closest_nodes {
+            let host_id = host_id.clone();
+            let key = key.clone();
+            let value = value.clone();
+
+            future_stores.push(async move {
+                let res = self
+                    .rpc_handler
+                    .request(
+                        &target,
+                        DhtRequest::Store {
+                            sender_id: host_id,
+                            key,
+                            data: value,
+                        },
+                        Duration::from_secs(5),
+                    )
+                    .await;
+
+                (target, res)
+            });
+        }
+
+        while let Some((target, result)) = future_stores.next().await {
+            match result {
+                Ok(DhtResponse::Pong {
+                    receiver_id: sender_id,
+                }) if target.id == sender_id => {
+                    info!("announce succedded");
+                }
+                _ => {
+                    {
+                        let mut route_table = self.route_table.write().await;
+                        route_table.remove(&target);
+                    }
+
+                    warn!("failed to store on node: ?");
+                }
+            }
+        }
+
+        {
+            let mut dht_store = self.store.write().await;
+            dht_store.insert(key, value)
+        };
+
+        Ok(())
+    }
+
     // TODO implement find_value
-
     // TODO implement get_peers -> find value for Info Hash (inside bqti)
 
     // TODO implement PEX
@@ -235,12 +297,23 @@ impl Kademlia {
         src: SocketAddr,
     ) -> Result<(), KademliaError> {
         match request.payload {
-            DhtRequest::Ping { node_id } => {
-                self.handle_ping(request.id, &Node::from_socket(node_id, src))
+            DhtRequest::Ping { sender_id } => {
+                self.handle_ping(request.id, &Node::from_socket(sender_id, src))
                     .await
             }
-            DhtRequest::FindNode { node_id, lookup_id } => {
-                self.handle_find_node(request.id, &Node::from_socket(node_id, src), lookup_id)
+            DhtRequest::FindNode {
+                sender_id,
+                lookup_id,
+            } => {
+                self.handle_find_node(request.id, &Node::from_socket(sender_id, src), lookup_id)
+                    .await
+            }
+            DhtRequest::Store {
+                sender_id,
+                key,
+                data,
+            } => {
+                self.handle_store(request.id, &Node::from_socket(sender_id, src), key, data)
                     .await
             }
         }
@@ -260,7 +333,13 @@ impl Kademlia {
         info!("ping");
 
         self.rpc_handler
-            .reply(&sender, request_id, DhtResponse::Pong { node_id: host_id })
+            .reply(
+                &sender,
+                request_id,
+                DhtResponse::Pong {
+                    receiver_id: host_id,
+                },
+            )
             .await?;
 
         Ok(())
@@ -291,11 +370,46 @@ impl Kademlia {
                 &sender,
                 request_id,
                 DhtResponse::Peers {
-                    node_id: host_id,
+                    receiver_id: host_id,
                     peers: closest_nodes
                         .iter()
                         .map(PeerResponse::from)
                         .collect::<Vec<_>>(),
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_store(
+        &self,
+        request_id: RequestId,
+        sender: &Node,
+        key: Key,
+        data: KademliaData,
+    ) -> Result<(), KademliaError> {
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        {
+            let mut route_table = self.route_table.write().await;
+            route_table.insert_node(sender).await;
+        }
+
+        {
+            let mut dht_store = self.store.write().await;
+            dht_store.insert(key, data);
+        }
+
+        self.rpc_handler
+            .reply(
+                &sender,
+                request_id,
+                DhtResponse::Pong {
+                    receiver_id: host_id,
                 },
             )
             .await?;
