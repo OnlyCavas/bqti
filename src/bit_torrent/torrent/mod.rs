@@ -1,4 +1,5 @@
 pub mod builder;
-mod hasher;
 mod merkle;
 pub mod metainfo;
+mod piece_hash;
+

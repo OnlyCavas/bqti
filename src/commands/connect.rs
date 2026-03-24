@@ -1,5 +1,7 @@
 use crate::{
-    network::{ConnectionManager, LeafCert, ManagerOptions, Message, Peer, QuicEndpointBuilder},
+    network::{
+        ConnectionManager, LeafCert, ManagerOptions, Message, Packet, Peer, QuicEndpointBuilder,
+    },
     utils,
 };
 
@@ -37,7 +39,7 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
     manager.connect(&other_self).await?;
 
     tokio::spawn(async move {
-        while let Some(message) = stream_rx.recv().await {
+        while let Some(Packet(message, _)) = stream_rx.recv().await {
             match message {
                 Message::KeepAlive => info!("keep alive"),
                 Message::DHT(payload) => info!("dht: {}", hex::encode(payload)),

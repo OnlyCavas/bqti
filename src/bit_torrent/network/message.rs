@@ -1,3 +1,21 @@
+use std::net::SocketAddr;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum MessageError {
+    #[error("failed to parse message")]
+    ParseFailed(),
+}
+
+pub struct Packet(pub Message, pub SocketAddr);
+
+impl Packet {
+    pub fn new(message: Message, socket_addr: SocketAddr) -> Self {
+        Self(message, socket_addr)
+    }
+}
+
 #[derive(Debug)]
 pub enum Message {
     KeepAlive,
@@ -23,14 +41,14 @@ impl Message {
         buf
     }
 
-    pub fn from_bytes(id: u8, payload: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_bytes(id: u8, payload: &[u8]) -> Result<Self, MessageError> {
         let payload = payload.to_vec();
 
         let message = match id {
             0x14 => Message::PEX(payload),
             b'd' => Message::DHT(payload),
             19 => Message::Standard(payload),
-            _ => return Err("failed to parse message".into()),
+            _ => return Err(MessageError::ParseFailed()),
         };
 
         Ok(message)

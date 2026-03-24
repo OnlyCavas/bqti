@@ -14,7 +14,7 @@ pub enum BencodeError {
 
 pub fn decode<TData: DeserializeOwned>(bytes: &[u8]) -> Result<TData, BencodeError> {
     let metadata = serde_bencode::from_bytes::<TData>(&bytes)
-        .map_err(|e| BencodeError::Decode(e.to_string() + "here"))?;
+        .map_err(|e| BencodeError::Decode(e.to_string()))?;
 
     Ok(metadata)
 }

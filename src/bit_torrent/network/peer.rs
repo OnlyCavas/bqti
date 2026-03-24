@@ -9,6 +9,7 @@ pub enum PeerError {
 }
 
 // TODO generate peer id, hash 20 or 32?
+#[derive(Debug)]
 pub struct Peer {
     pub id: String,
     pub address: SocketAddr,

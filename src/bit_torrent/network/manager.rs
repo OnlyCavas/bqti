@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use ::futures::future::join_all;
 use anyhow::Result;
@@ -9,6 +9,7 @@ use tokio::{
     task::JoinSet,
     time::timeout,
 };
+
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
@@ -24,12 +25,15 @@ pub enum ConnectionManagerError {
 
     #[error("failed to establish a connection, with {0}")]
     EstablishError(String),
+
+    #[error("failed to fetch local ip address")]
+    LocalIpError(),
 }
 
 use crate::network::{
     config::QuicEndpointBuilder,
     connection::{self, Connection, OnDisconnect},
-    message::Message,
+    message::{Message, Packet},
     peer::Peer,
 };
 
@@ -57,15 +61,15 @@ pub struct ConnectionManager {
     endpoint: quinn::Endpoint,
     connections: Arc<RwLock<HashMap<String, Connection>>>,
     options: ManagerOptions,
-    pub message_tx: mpsc::Sender<Message>,
+    pub message_tx: mpsc::Sender<Packet>,
 }
 
 impl ConnectionManager {
     pub fn new(
         tls_endpoint: QuicEndpointBuilder,
         options: ManagerOptions,
-    ) -> Result<(Self, mpsc::Receiver<Message>)> {
-        let (tx, stream_rx) = mpsc::channel::<Message>(CHANNEL_BUFFER_SIZE);
+    ) -> Result<(Self, mpsc::Receiver<Packet>)> {
+        let (tx, stream_rx) = mpsc::channel::<Packet>(CHANNEL_BUFFER_SIZE);
 
         let endpoint = tls_endpoint.build()?;
 
@@ -77,6 +81,12 @@ impl ConnectionManager {
         };
 
         Ok((manager, stream_rx))
+    }
+
+    pub fn get_local_ip(self) -> Result<SocketAddr, ConnectionManagerError> {
+        self.endpoint
+            .local_addr()
+            .map_err(|_| ConnectionManagerError::LocalIpError())
     }
 
     fn on_disconnect_handler(&self) -> OnDisconnect {
@@ -156,23 +166,37 @@ impl ConnectionManager {
     }
 
     pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {
-        // TODO if a peer is already register, it must re-use the same connection and perhaps
-        // multiplex dht, pex, standard, keep alive, etc...
-        let on_disconnect = self.on_disconnect_handler();
-        let dispatcher = self.message_tx.clone();
+        let peer_id = peer.address.to_string();
 
-        let conn = self.endpoint.connect(peer.address, &peer.id)?.await?;
-        let peer_id = conn.remote_address().to_string();
+        {
+            let conns = self.connections.read().await;
 
-        let connection =
-            Connection::spawn(peer_id.clone(), conn, dispatcher, on_disconnect).await?;
+            if let Some(_conn) = conns.get(&peer_id) {
+                return Ok(());
+            }
+        }
+
+        // FIX &peer.id
+        let connecting = self.endpoint.connect(peer.address, "localhost")?.await?;
+
+        let connection = Connection::spawn(
+            peer_id.clone(),
+            connecting,
+            self.message_tx.clone(),
+            self.on_disconnect_handler(),
+        )
+        .await?;
 
         Self::add_peer(&self.connections, peer_id, connection).await;
 
         Ok(())
     }
 
-    pub async fn send(&self, peer: &Peer, msg: Message) -> Result<(), ConnectionManagerError> {
+    pub async fn send(
+        &self,
+        peer: &Peer,
+        msg: impl Into<Message>,
+    ) -> Result<(), ConnectionManagerError> {
         let conns = self.connections.read().await;
         let peer_id = peer.address.to_string();
 
@@ -181,7 +205,7 @@ impl ConnectionManager {
             return Err(ConnectionManagerError::EstablishError(peer_id));
         };
 
-        conn.send_message(msg).await?;
+        conn.send_message(msg.into()).await?;
 
         Ok(())
     }

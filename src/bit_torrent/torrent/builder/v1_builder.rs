@@ -4,11 +4,11 @@ use crate::{
     bit_torrent::{
         bencode::{self, BencodeInfo, BencodeMode},
         torrent::{
-            hasher::{PieceHasher, PieceHasherV1},
             metainfo::{
                 InfoHash, InfoHashV1, PieceLength, TorrentCommon, TorrentError, TorrentFile,
                 v1::TorrentV1,
             },
+            piece_hash::{PieceHasher, PieceHasherV1},
         },
         types::ByteSize,
     },

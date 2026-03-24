@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use quinn::{RecvStream, SendStream};
+use quinn::RecvStream;
 use thiserror::Error;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::Instrument;
 
-use crate::network::message::Message;
+use crate::network::message::{Message, Packet};
 
 pub type OnDisconnect = Arc<dyn Fn(String) + Send + Sync + 'static>;
 
@@ -14,13 +14,13 @@ pub enum ConnectionError {
     #[error("message too big: {0} bytes")]
     MessageLimit(u32),
 
-    #[error("Erro de rede (IO): {0}")]
+    #[error("network error (IO): {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("O canal interno de mensagens fechou")]
+    #[error("internal channel closed")]
     DispatcherClosed,
 
-    #[error("Erro no protocolo BitTorrent: {0}")]
+    #[error("protocol error: {0}")]
     Protocol(String),
 }
 
@@ -55,7 +55,7 @@ impl Connection {
     pub async fn spawn(
         peer: String,
         connection: quinn::Connection,
-        dispatcher: mpsc::Sender<Message>,
+        dispatcher: mpsc::Sender<Packet>,
         on_disconnect: OnDisconnect,
     ) -> Result<Self, ConnectionError> {
         let peer_id = peer.clone();
@@ -77,7 +77,7 @@ impl Connection {
 
     async fn handle_connection(
         connection: quinn::Connection,
-        stream_dispatch: mpsc::Sender<Message>,
+        stream_dispatch: mpsc::Sender<Packet>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         async {
             info!("connection established");
@@ -85,7 +85,7 @@ impl Connection {
             loop {
                 let stream = connection.accept_bi().await;
 
-                let stream = match stream {
+                let (_, recv) = match stream {
                     Err(quinn::ConnectionError::ApplicationClosed { .. }) => {
                         info!("connection closed");
                         return Ok(());
@@ -95,9 +95,10 @@ impl Connection {
                 };
 
                 let stream_dispatch = stream_dispatch.clone();
+                let remote_addr = connection.remote_address();
+
                 tokio::spawn(async move {
-                    if let Err(e) = Self::handle_request(stream.0, stream.1, stream_dispatch).await
-                    {
+                    if let Err(e) = Self::handle_request(recv, stream_dispatch, remote_addr).await {
                         warn!("failed to handle stream: {}", e);
                     }
                 });
@@ -110,54 +111,57 @@ impl Connection {
     }
 
     async fn handle_request(
-        _send: SendStream,
         mut recv: RecvStream,
-        message_dispatcher: mpsc::Sender<Message>,
+        message_dispatcher: mpsc::Sender<Packet>,
+        remote_addr: SocketAddr,
     ) -> Result<(), ConnectionError> {
-        loop {
-            let mut len_bytes = [0u8; 4];
+        let mut len_bytes = [0u8; 4];
 
-            recv.read_exact(&mut len_bytes)
+        recv.read_exact(&mut len_bytes)
+            .await
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        let length = u32::from_be_bytes(len_bytes);
+
+        if length == 0 {
+            message_dispatcher
+                .send(Packet::new(Message::KeepAlive, remote_addr))
                 .await
-                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+                .map_err(|_| ConnectionError::DispatcherClosed)?;
 
-            let length = u32::from_be_bytes(len_bytes);
-
-            if length == 0 {
-                message_dispatcher
-                    .send(Message::KeepAlive)
-                    .await
-                    .map_err(|_| ConnectionError::DispatcherClosed)?;
-
-                return Ok(());
-            }
-
-            if length > 1024 * 1024 {
-                return Err(ConnectionError::MessageLimit(length));
-            }
-
-            let mut id_bytes = [0u8; 1];
-            recv.read_exact(&mut id_bytes)
-                .await
-                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
-
-            let message_id = id_bytes[0];
-
-            let payload_len = (length - 1) as usize;
-            let mut payload_bytes = vec![0u8; payload_len];
-
-            recv.read_exact(&mut payload_bytes)
-                .await
-                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
-
-            let message = Message::from_bytes(message_id, &payload_bytes)
-                .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
-
-            if let Err(e) = message_dispatcher.send(message).await {
-                warn!("failed to dispatch... {}", e);
-                return Err(ConnectionError::DispatcherClosed);
-            }
+            return Ok(());
         }
+
+        if length > 1024 * 1024 {
+            return Err(ConnectionError::MessageLimit(length));
+        }
+
+        let mut id_bytes = [0u8; 1];
+        recv.read_exact(&mut id_bytes)
+            .await
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        let message_id = id_bytes[0];
+
+        let payload_len = (length - 1) as usize;
+        let mut payload_bytes = vec![0u8; payload_len];
+
+        recv.read_exact(&mut payload_bytes)
+            .await
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        let message = Message::from_bytes(message_id, &payload_bytes)
+            .map_err(|e| ConnectionError::Protocol(e.to_string()))?;
+
+        if let Err(e) = message_dispatcher
+            .send(Packet::new(message, remote_addr))
+            .await
+        {
+            warn!("failed to dispatch... {}", e);
+            return Err(ConnectionError::DispatcherClosed);
+        }
+
+        Ok(())
     }
 
     pub async fn close(self) -> Result<(), ConnectionError> {
