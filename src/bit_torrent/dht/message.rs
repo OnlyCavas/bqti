@@ -64,6 +64,10 @@ pub enum DhtRequest {
         sender_id: Key,
         lookup_id: Key,
     },
+    FindValue {
+        sender_id: Key,
+        key: Key,
+    },
     Store {
         sender_id: Key,
         key: Key,
@@ -87,6 +91,10 @@ impl From<&PeerResponse> for Node {
 pub enum DhtResponse {
     Pong {
         receiver_id: Key,
+    },
+    Value {
+        receiver_id: Key,
+        value: KademliaData,
     },
     Peers {
         receiver_id: Key,

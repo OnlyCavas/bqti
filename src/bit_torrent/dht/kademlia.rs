@@ -60,6 +60,9 @@ impl Kademlia {
         Ok(dht)
     }
 
+    // TODO join network
+    // TODO POW as joining ticket
+
     // client
     pub async fn ping(&self, target: &Node) -> Result<(), KademliaError> {
         let host_id = {
@@ -222,7 +225,7 @@ impl Kademlia {
         Ok(nodes)
     }
 
-    // TODO implement publish_torrent -> store for Info Hash (inside bqti)
+    // TODO implement announce_torrent -> store for Info Hash (inside bqti)
     pub async fn store(&self, key: Key, value: KademliaData) -> Result<(), KademliaError> {
         let closest_nodes = self.node_lookup(&key).await?;
 
@@ -285,8 +288,100 @@ impl Kademlia {
         Ok(())
     }
 
-    // TODO implement find_value
-    // TODO implement get_peers -> find value for Info Hash (inside bqti)
+    // TODO implement get_torrent -> find value for Info Hash (inside bqti)
+    pub async fn find_value(&self, key: &Key) -> Result<Option<KademliaData>, KademliaError> {
+        const ALPHA: usize = 3;
+        const K: usize = KBUCKET_MAX;
+
+        let mut futures_rpcs = FuturesUnordered::new();
+        let mut visited_nodes = HashSet::<Key>::new();
+        let mut candidates = {
+            let route_table = self.route_table.read().await;
+            route_table.get_closest_nodes(key, K)
+        };
+
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        loop {
+            candidates.sort_by_key(|node| key.distance(&node.id));
+            candidates.dedup_by(|a, b| a.id == b.id);
+
+            let take = ALPHA.saturating_sub(futures_rpcs.len());
+            let request_batch = candidates
+                .iter()
+                .filter(|node| !visited_nodes.contains(&node.id))
+                .take(take)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            for target in request_batch {
+                visited_nodes.insert(target.id.clone());
+                let host_id = host_id.clone();
+
+                futures_rpcs.push(async move {
+                    let result = self
+                        .rpc_handler
+                        .request(
+                            &target,
+                            DhtRequest::FindValue {
+                                sender_id: host_id,
+                                key: key.clone(),
+                            },
+                            Duration::from_secs(5),
+                        )
+                        .await;
+
+                    (target, result)
+                });
+            }
+
+            if futures_rpcs.is_empty() {
+                break;
+            }
+
+            if let Some((target, result)) = futures_rpcs.next().await {
+                match result {
+                    Ok(DhtResponse::Value { receiver_id, value }) if target.id == receiver_id => {
+                        return Ok(Some(value));
+                    }
+                    Ok(DhtResponse::Peers { receiver_id, peers }) if target.id == receiver_id => {
+                        for peer in peers {
+                            let node = Node::from(&peer);
+
+                            if node.id != host_id && !visited_nodes.contains(&node.id) {
+                                candidates.push(node);
+                            }
+                        }
+                    }
+                    _ => {
+                        {
+                            let mut route_table = self.route_table.write().await;
+                            route_table.remove(&target);
+                        }
+
+                        warn!("node failed to find_value, removing from route table");
+                        candidates.retain(|node| node.id != target.id);
+                    }
+                }
+            }
+
+            candidates.sort_by_key(|n| key.distance(&n.id));
+
+            let finished = candidates
+                .iter()
+                .take(K)
+                .all(|n| visited_nodes.contains(&n.id));
+
+            if finished && futures_rpcs.is_empty() {
+                break;
+            }
+        }
+
+        Ok(None)
+    }
 
     // TODO implement PEX
 
@@ -314,6 +409,10 @@ impl Kademlia {
                 data,
             } => {
                 self.handle_store(request.id, &Node::from_socket(sender_id, src), key, data)
+                    .await
+            }
+            DhtRequest::FindValue { sender_id, key } => {
+                self.handle_find_value(request.id, &Node::from_socket(sender_id, src), key)
                     .await
             }
         }
@@ -412,6 +511,47 @@ impl Kademlia {
                     receiver_id: host_id,
                 },
             )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_find_value(
+        &self,
+        request_id: RequestId,
+        sender: &Node,
+        key: Key,
+    ) -> Result<(), KademliaError> {
+        let (host_id, record) = {
+            let route_table = self.route_table.read().await;
+            let dht_store = self.store.read().await;
+
+            (route_table.host.id.clone(), dht_store.get(&key).cloned())
+        };
+
+        let response = match record {
+            Some(value) => DhtResponse::Value {
+                receiver_id: host_id,
+                value,
+            },
+            None => {
+                let closest_nodes = {
+                    let route_table = self.route_table.read().await;
+                    route_table.get_closest_nodes(&key, KBUCKET_MAX)
+                };
+
+                DhtResponse::Peers {
+                    receiver_id: host_id,
+                    peers: closest_nodes
+                        .iter()
+                        .map(PeerResponse::from)
+                        .collect::<Vec<_>>(),
+                }
+            }
+        };
+
+        self.rpc_handler
+            .reply(&sender, request_id, response)
             .await?;
 
         Ok(())
