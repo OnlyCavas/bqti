@@ -2,7 +2,10 @@ use std::net::SocketAddr;
 
 use thiserror::Error;
 
-use crate::{dht::Key, network::Peer};
+use crate::{
+    dht::{Key, message::PeerResponse},
+    network::Peer,
+};
 
 #[derive(Debug, Error)]
 pub enum NodeError {
@@ -30,6 +33,15 @@ impl Node {
         Self {
             id: key,
             addr: socket,
+        }
+    }
+}
+
+impl From<&Node> for PeerResponse {
+    fn from(value: &Node) -> Self {
+        Self {
+            id: value.id.clone(),
+            addr: value.addr,
         }
     }
 }

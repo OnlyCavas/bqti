@@ -1,14 +1,20 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
+use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
     dht::{
-        Key, Node, RequestId, RpcError,
-        message::{DhtMessageError, DhtRequest, DhtResponse, RpcRequest},
+        Key, Node, OrdDistance, RequestId, RpcError,
+        message::{DhtMessageError, DhtRequest, DhtResponse, PeerResponse, RpcRequest},
         node,
-        route_table::{self, RouteTable},
+        route_table::{KBUCKET_MAX, RouteTable},
         rpc::RpcHandler,
     },
     network::ConnectionManagerError,
@@ -30,7 +36,7 @@ pub enum KademliaError {
 }
 
 pub enum KademliaData {
-    Peer(SocketAddr),
+    Peers(HashSet<SocketAddr>),
     Value(Vec<u8>),
 }
 
@@ -83,6 +89,145 @@ impl Kademlia {
         Ok(())
     }
 
+    pub async fn node_lookup(&self, lookup_key: &Key) -> Result<Vec<Node>, KademliaError> {
+        const ALPHA: usize = 3;
+        const K: usize = KBUCKET_MAX;
+
+        let mut futures_rpcs = FuturesUnordered::new();
+        let mut visited_nodes = HashSet::<Key>::new();
+        let mut candidates = {
+            let route_table = self.route_table.read().await;
+            route_table.get_closest_nodes(lookup_key, K)
+        };
+
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        loop {
+            candidates.sort_by_key(|node| lookup_key.distance(&node.id));
+            candidates.dedup_by(|a, b| a.id == b.id);
+
+            let take = ALPHA.saturating_sub(futures_rpcs.len());
+            let request_batch = candidates
+                .iter()
+                .filter(|node| !visited_nodes.contains(&node.id))
+                .take(take)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            for target in request_batch {
+                visited_nodes.insert(target.id.clone());
+
+                futures_rpcs.push(async move {
+                    let result = self.find_node(&target, lookup_key.clone()).await;
+                    (target, result)
+                });
+            }
+
+            if futures_rpcs.is_empty() {
+                break;
+            }
+
+            if let Some((target, result)) = futures_rpcs.next().await {
+                match result {
+                    Err(_) => {
+                        {
+                            let mut route_table = self.route_table.write().await;
+                            route_table.remove(&target);
+                        }
+
+                        warn!(
+                            "node failed to respond, removing it from table: {:?}",
+                            target.id
+                        );
+
+                        candidates.retain(|node| node.id != target.id);
+                    }
+                    Ok(nodes) => {
+                        {
+                            let mut route_table = self.route_table.write().await;
+                            route_table.insert_node(&target).await;
+                        }
+
+                        for node in nodes {
+                            if node.id != host_id
+                                && !visited_nodes.contains(&node.id)
+                                && !candidates.iter().any(|c| c.id == node.id)
+                            {
+                                candidates.push(node);
+                            }
+                        }
+                    }
+                }
+            }
+
+            candidates.sort_by_key(|n| lookup_key.distance(&n.id));
+
+            let finished = candidates
+                .iter()
+                .take(K)
+                .all(|n| visited_nodes.contains(&n.id));
+
+            if finished && futures_rpcs.is_empty() {
+                break;
+            }
+        }
+
+        candidates.truncate(KBUCKET_MAX);
+
+        Ok(candidates)
+    }
+
+    pub async fn find_node(
+        &self,
+        target: &Node,
+        lookup_key: Key,
+    ) -> Result<Vec<Node>, KademliaError> {
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        let result = self
+            .rpc_handler
+            .request(
+                target,
+                DhtRequest::FindNode {
+                    node_id: host_id,
+                    lookup_id: lookup_key,
+                },
+                Duration::from_secs(5),
+            )
+            .await?;
+
+        let DhtResponse::Peers {
+            node_id: sender_id,
+            peers,
+        } = result
+        else {
+            return Err(RpcError::UnexpectedResponse)?;
+        };
+
+        if target.id != sender_id {
+            return Err(RpcError::UnexpectedResponse)?;
+        }
+
+        let nodes = peers.iter().map(Node::from).collect::<Vec<_>>();
+        Ok(nodes)
+    }
+
+    // TODO implement store
+    // TODO implement publish_torrent -> store for Info Hash (inside bqti)
+
+    // TODO implement find_nodes
+    // TODO implement find_value
+
+    // TODO implement get_peers -> find value for Info Hash (inside bqti)
+
+    // TODO implement PEX
+
     // backend
     pub async fn handle_request(
         &self,
@@ -90,21 +235,21 @@ impl Kademlia {
         src: SocketAddr,
     ) -> Result<(), KademliaError> {
         match request.payload {
-            DhtRequest::Ping { node_id } => self.handle_ping(request.id, node_id, src).await,
+            DhtRequest::Ping { node_id } => {
+                self.handle_ping(request.id, &Node::from_socket(node_id, src))
+                    .await
+            }
+            DhtRequest::FindNode { node_id, lookup_id } => {
+                self.handle_find_node(request.id, &Node::from_socket(node_id, src), lookup_id)
+                    .await
+            }
         }
     }
 
-    async fn handle_ping(
-        &self,
-        request_id: RequestId,
-        key: Key,
-        source: SocketAddr,
-    ) -> Result<(), KademliaError> {
-        let sender_node = Node::from_socket(key, source);
-
+    async fn handle_ping(&self, request_id: RequestId, sender: &Node) -> Result<(), KademliaError> {
         {
             let mut route_table = self.route_table.write().await;
-            route_table.insert_node(&sender_node).await;
+            route_table.insert_node(&sender).await;
         };
 
         let host_id = {
@@ -115,10 +260,43 @@ impl Kademlia {
         info!("ping");
 
         self.rpc_handler
+            .reply(&sender, request_id, DhtResponse::Pong { node_id: host_id })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_find_node(
+        &self,
+        request_id: RequestId,
+        sender: &Node,
+        lookup: Key,
+    ) -> Result<(), KademliaError> {
+        let (host_id, closest_nodes) = {
+            let route_table = self.route_table.read().await;
+
+            (
+                route_table.host.id.clone(),
+                route_table.get_closest_nodes(&lookup, KBUCKET_MAX),
+            )
+        };
+
+        {
+            let mut route_table = self.route_table.write().await;
+            route_table.insert_node(sender).await;
+        }
+
+        self.rpc_handler
             .reply(
-                &sender_node,
+                &sender,
                 request_id,
-                DhtResponse::Pong { node_id: host_id },
+                DhtResponse::Peers {
+                    node_id: host_id,
+                    peers: closest_nodes
+                        .iter()
+                        .map(PeerResponse::from)
+                        .collect::<Vec<_>>(),
+                },
             )
             .await?;
 

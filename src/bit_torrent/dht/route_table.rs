@@ -1,6 +1,6 @@
-use crate::dht::{KEY_ID_LENGTH, Key, Node, OrdDistance, RpcHandler, k_bucket::KBucket};
+use crate::dht::{KEY_ID_LENGTH, Key, Node, OrdDistance, k_bucket::KBucket};
 
-const KBUCKET_MAX: usize = 20;
+pub const KBUCKET_MAX: usize = 20;
 
 pub struct RouteTable {
     pub host: Node,
@@ -75,7 +75,7 @@ impl RouteTable {
         kbucket.remove(&node.id);
     }
 
-    pub fn get_closest_nodes(&self, key: &Key, count: usize) -> Vec<&Node> {
+    pub fn get_closest_nodes(&self, key: &Key, count: usize) -> Vec<Node> {
         let mut distances: Vec<_> = self
             .kbuckets
             .iter()
@@ -89,7 +89,7 @@ impl RouteTable {
         distances
             .into_iter()
             .take(count)
-            .map(|(_, node)| node)
+            .map(|(_, node)| node.clone())
             .collect()
     }
 }

@@ -8,7 +8,7 @@ pub trait OrdDistance {
     fn distance(&self, other: &Self) -> Self;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Key(pub Hash32Bytes);
 
 impl Key {

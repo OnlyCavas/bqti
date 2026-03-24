@@ -1,9 +1,11 @@
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     bit_torrent::bencode::{self, BencodeError},
-    dht::{Key, RequestId},
+    dht::{Key, Node, RequestId},
     network::Message,
 };
 
@@ -47,12 +49,30 @@ impl<T: for<'de> Deserialize<'de>> RpcEnvelope<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtRequest {
     Ping { node_id: Key },
+    FindNode { node_id: Key, lookup_id: Key },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerResponse {
+    pub id: Key,
+    pub addr: SocketAddr,
+}
+
+impl From<&PeerResponse> for Node {
+    fn from(value: &PeerResponse) -> Self {
+        Node::from_socket(value.id.clone(), value.addr)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtResponse {
-    Pong { node_id: Key },
-    Sopa,
+    Pong {
+        node_id: Key,
+    },
+    Peers {
+        node_id: Key,
+        peers: Vec<PeerResponse>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
