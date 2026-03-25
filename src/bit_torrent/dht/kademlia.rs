@@ -7,16 +7,16 @@ use std::{
 
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::sleep};
 
 use crate::{
     dht::{
-        Key, Node, OrdDistance, RequestId, RpcError,
+        BootStrap, Key, Node, OrdDistance, RequestId, RpcError,
         message::{
             DhtMessageError, DhtRequest, DhtResponse, KademliaData, PeerResponse, RpcRequest,
         },
         node,
-        route_table::{KBUCKET_MAX, RouteTable},
+        route_table::{InsertResult, KBUCKET_MAX, RouteTable},
         rpc::RpcHandler,
     },
     network::ConnectionManagerError,
@@ -26,6 +26,9 @@ use crate::{
 pub enum KademliaError {
     #[error(transparent)]
     NodeError(#[from] node::NodeError),
+
+    #[error("failed to connect over to bootstrap node")]
+    BootstrapFailed(),
 
     #[error("failed to find closest nodes")]
     NoNodesFound(),
@@ -48,7 +51,8 @@ pub struct Kademlia {
 
 impl Kademlia {
     pub fn new(addr: &str, rpc_handler: Arc<RpcHandler>) -> Result<Self, KademliaError> {
-        let host = Node::new(addr)?;
+        let host = Node::new(addr)?; // FIX it's creating a new id, each time, that's why is
+        // failing
         let route_table = RouteTable::new(host.clone());
 
         let dht = Self {
@@ -60,8 +64,71 @@ impl Kademlia {
         Ok(dht)
     }
 
-    // TODO join network
-    // TODO POW as joining ticket
+    async fn acknowledge(&self, node: &Node) {
+        loop {
+            let insert_result = {
+                let mut route_table = self.route_table.write().await;
+                route_table.try_insert(node).await
+            };
+
+            match insert_result {
+                InsertResult::None => {
+                    warn!("failed to insert into route table");
+                    break;
+                }
+                InsertResult::Inserted => break,
+                InsertResult::Split => continue,
+                InsertResult::Ping(old, new) => match self.ping(&old).await {
+                    Ok(_) => break,
+                    Err(_) => {
+                        let mut route_table = self.route_table.write().await;
+                        route_table.replace(&new);
+                    }
+                },
+            }
+        }
+    }
+
+    // TODO join network, with pow (12 - 16 bits of difficulty)
+    pub async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
+        let bootstrap = bootstrap.node();
+
+        let Ok(_) = self.ping(bootstrap).await else {
+            return Err(KademliaError::BootstrapFailed());
+        };
+
+        // 1. TODO request pow challange -> rpc ask_challange
+        // 2. TODO submit pow challange -> rpc submit_challange
+
+        self.acknowledge(bootstrap).await;
+
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        self.node_lookup(&host_id).await?;
+        self.refresh_buckets(Duration::from_millis(50)).await;
+
+        Ok(())
+    }
+
+    async fn refresh_buckets(&self, interval: Duration) {
+        const BUCKET_RANGE: usize = 40; // global coverage
+
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        for index in 0..BUCKET_RANGE {
+            let refresh_key = host_id.randomize(index);
+            let _ = self.node_lookup(&refresh_key).await;
+            sleep(interval).await;
+        }
+    }
+
+    // TODO implement tokens, on store and find_node and find_value
 
     // client
     pub async fn ping(&self, target: &Node) -> Result<(), KademliaError> {
@@ -89,6 +156,11 @@ impl Kademlia {
         };
 
         if target.id != target_id {
+            info!(
+                "target: {} != expected: {}",
+                target.id.hex(),
+                target_id.hex()
+            );
             return Err(RpcError::UnexpectedResponse)?;
         }
 
@@ -152,10 +224,7 @@ impl Kademlia {
                         candidates.retain(|node| node.id != target.id);
                     }
                     Ok(nodes) => {
-                        {
-                            let mut route_table = self.route_table.write().await;
-                            route_table.insert_node(&target).await;
-                        }
+                        self.acknowledge(&target).await;
 
                         for node in nodes {
                             if node.id != host_id
@@ -419,10 +488,7 @@ impl Kademlia {
     }
 
     async fn handle_ping(&self, request_id: RequestId, sender: &Node) -> Result<(), KademliaError> {
-        {
-            let mut route_table = self.route_table.write().await;
-            route_table.insert_node(&sender).await;
-        };
+        self.acknowledge(sender).await;
 
         let host_id = {
             let route_table = self.route_table.read().await;
@@ -459,10 +525,7 @@ impl Kademlia {
             )
         };
 
-        {
-            let mut route_table = self.route_table.write().await;
-            route_table.insert_node(sender).await;
-        }
+        self.acknowledge(sender).await;
 
         self.rpc_handler
             .reply(
@@ -493,10 +556,7 @@ impl Kademlia {
             route_table.host.id.clone()
         };
 
-        {
-            let mut route_table = self.route_table.write().await;
-            route_table.insert_node(sender).await;
-        }
+        self.acknowledge(sender).await;
 
         {
             let mut dht_store = self.store.write().await;

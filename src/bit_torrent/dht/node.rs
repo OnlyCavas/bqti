@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use rand::Rng;
 use thiserror::Error;
 
 use crate::{
@@ -13,6 +14,18 @@ pub enum NodeError {
     FailParse(#[from] std::net::AddrParseError),
 }
 
+pub struct BootStrap(Node);
+
+impl BootStrap {
+    pub fn new(addr: &str) -> Result<Self, NodeError> {
+        Ok(Self(Node::from_socket(Key::new(&[0u8; 32]), addr.parse()?)))
+    }
+
+    pub fn node(&self) -> &Node {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: Key,
@@ -21,8 +34,13 @@ pub struct Node {
 
 impl Node {
     pub fn new(addr: &str) -> Result<Self, NodeError> {
+        // NOTE: generate a public key
+        let mut random_bytes = [0u8; 32];
+        rand::rng().fill_bytes(&mut random_bytes);
+        let id = Key::new(&random_bytes);
+
         let node = Self {
-            id: Key::new(&[0u8; 32]),
+            id: id,
             addr: addr.parse()?,
         };
 

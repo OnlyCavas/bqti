@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use crate::dht::{Key, Node};
 
+#[derive(Debug)]
 pub struct KBucket {
     nodes: VecDeque<Node>,
     bucket_size: usize,
@@ -54,7 +55,7 @@ impl KBucket {
         self.nodes.front()
     }
 
-    pub fn split(mut self) -> (KBucket, KBucket) {
+    pub fn split(&mut self) -> (KBucket, KBucket) {
         let next_depth = self.depth + 1;
 
         let mut left_bucket = KBucket::new(next_depth, self.bucket_size);

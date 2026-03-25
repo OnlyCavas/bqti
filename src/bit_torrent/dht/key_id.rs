@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{hasher::Sha256Hash, types::Hash32Bytes};
+use rand::RngExt;
 
 pub const KEY_ID_LENGTH: usize = 32;
 
@@ -14,6 +15,29 @@ pub struct Key(pub Hash32Bytes);
 impl Key {
     pub fn new(pub_key: &[u8]) -> Self {
         Key(*Sha256Hash::digest(pub_key).as_bytes())
+    }
+
+    pub fn randomize(&self, index: usize) -> Self {
+        let mut result = self.0;
+
+        let byte_idx = index / 8;
+        let bit_idx = index % 8;
+
+        result[byte_idx] ^= 1 << (7 - bit_idx);
+
+        let mut rng = rand::rng();
+        for i in (index + 1)..256 {
+            let b_idx = i / 8;
+            let bt_idx = i % 8;
+
+            if rng.random_bool(0.5) {
+                result[b_idx] |= 1 << (7 - bt_idx);
+            } else {
+                result[b_idx] &= !(1 << (7 - bt_idx));
+            }
+        }
+
+        Key(result)
     }
 
     pub fn hex(&self) -> String {
@@ -66,6 +90,7 @@ impl<'de> Deserialize<'de> for Key {
                 let arr: [u8; 32] = v
                     .try_into()
                     .map_err(|_| E::invalid_length(v.len(), &self))?;
+
                 Ok(Key(arr))
             }
 

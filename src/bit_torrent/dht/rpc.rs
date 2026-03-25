@@ -108,6 +108,7 @@ impl RpcHandler {
         tout: Duration,
     ) -> Result<DhtResponse, RpcError> {
         let peer = peer.into();
+
         let id = self.alloc_id();
         let envelope = RpcRequest::new(id, request);
         let packet = DhtPacket::Request(envelope);

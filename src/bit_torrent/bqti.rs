@@ -8,7 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    dht::{DhtPacket, Kademlia, Node, RpcHandler},
+    dht::{BootStrap, DhtPacket, Kademlia, Node, RpcHandler},
     network::{ConnectionManager, Message, Packet},
 };
 
@@ -84,10 +84,36 @@ impl Bqti {
                                     Ok(n) => n,
                                     Err(e) => { error!("invalid node addr: {}", e); return; }
                                 };
+
                                 match kademlia.ping(&node).await {
                                     Ok(r) => info!("ping response: {:?}", r),
                                     Err(e) => error!("ping failed: {}", e),
                                 }
+                            });
+                        },
+                        "j" => {
+                            info!("pressed j");
+
+                            join_set.spawn(async move {
+                                let node = match BootStrap::new("127.0.0.1:9002") {
+                                    Ok(n) => n,
+                                    Err(e) => { error!("invalid node addr: {}", e); return; }
+                                };
+
+                                match kademlia
+                                    .join_network(&node)
+                                    .await {
+                                        Ok(_) => info!("it bootstrap!"),
+                                        Err(_) => warn!("failed to boostrap"),
+                                    }
+                            });
+                        },
+                        "c" => {
+                            info!("pressed c");
+
+                            join_set.spawn(async move {
+                                let route_table = kademlia.route_table.read().await;
+                                info!("{:?}", route_table);
                             });
                         },
                         "q" => break,

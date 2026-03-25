@@ -2,6 +2,14 @@ use crate::dht::{KEY_ID_LENGTH, Key, Node, OrdDistance, k_bucket::KBucket};
 
 pub const KBUCKET_MAX: usize = 20;
 
+pub enum InsertResult {
+    None,
+    Inserted,
+    Split,
+    Ping(Node, Node),
+}
+
+#[derive(Debug)]
 pub struct RouteTable {
     pub host: Node,
     kbuckets: Vec<KBucket>,
@@ -41,26 +49,40 @@ impl RouteTable {
         KEY_ID_LENGTH * 8 - 1
     }
 
-    pub async fn insert_node(&mut self, node: &Node) {
+    pub async fn try_insert(&mut self, node: &Node) -> InsertResult {
+        let index = self.get_bucket_index(&node.id);
+
+        let Some(kbucket) = self.kbuckets.get_mut(index) else {
+            return InsertResult::None;
+        };
+
+        if !kbucket.is_full() {
+            kbucket.insert(node.clone());
+            return InsertResult::Inserted;
+        }
+
+        if kbucket.contains(&self.host.id) {
+            let (left, right) = kbucket.split();
+
+            self.kbuckets[index] = left;
+            self.kbuckets.insert(index + 1, right);
+
+            return InsertResult::Split;
+        }
+
+        let Some(oldest_node) = kbucket.get_oldest_node() else {
+            return InsertResult::None;
+        };
+
+        return InsertResult::Ping(oldest_node.clone(), node.clone());
+    }
+
+    pub fn replace(&mut self, node: &Node) {
         let index = self.get_bucket_index(&node.id);
 
         let Some(kbucket) = self.kbuckets.get_mut(index) else {
             return;
         };
-
-        if !kbucket.is_full() {
-            kbucket.insert(node.clone());
-            return;
-        }
-
-        let Some(_oldest_node) = kbucket.get_oldest_node() else {
-            return;
-        };
-
-        // TODO ping the oldest node
-        // let Err(_) = DHTNode::ping(&self.host, &oldest_node).await else {
-        //     return;
-        // };
 
         kbucket.envict_and_insert(node.clone());
     }
