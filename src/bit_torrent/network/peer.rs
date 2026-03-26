@@ -8,8 +8,6 @@ pub enum PeerError {
     FailParse(#[from] std::net::AddrParseError),
 }
 
-// TODO generate peer id, hash 20 or 32? or it's from quic, so should be a name for server_name
-// attribute
 #[derive(Debug)]
 pub struct Peer {
     pub id: String,

@@ -8,6 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    bit_torrent::certs::KeyIdentity,
     dht::{BootStrap, DhtPacket, Kademlia, Node, RpcHandler},
     network::{ConnectionManager, Message, Packet},
 };
@@ -19,9 +20,13 @@ pub struct Bqti {
 }
 
 impl Bqti {
-    pub fn new(addr: &str, connection_manager: Arc<ConnectionManager>) -> Result<Self> {
+    pub fn new(
+        addr: &str,
+        connection_manager: Arc<ConnectionManager>,
+        certificate: KeyIdentity,
+    ) -> Result<Self> {
         let rpc_handler = Arc::new(RpcHandler::new(connection_manager.clone()));
-        let kademlia = Kademlia::new(addr, rpc_handler.clone())?;
+        let kademlia = Kademlia::new(addr, rpc_handler.clone(), certificate)?;
 
         let bqti = Self {
             kademlia: Arc::new(kademlia),
@@ -80,7 +85,7 @@ impl Bqti {
                             info!("pressed o");
 
                             join_set.spawn(async move {
-                                let node = match Node::new("127.0.0.1:9001") {
+                                let node = match Node::random("127.0.0.1:9001") {
                                     Ok(n) => n,
                                     Err(e) => { error!("invalid node addr: {}", e); return; }
                                 };
@@ -103,7 +108,7 @@ impl Bqti {
                                 match kademlia
                                     .join_network(&node)
                                     .await {
-                                        Ok(_) => info!("it bootstrap!"),
+                                        Ok(_) => info!("connected to the network"),
                                         Err(_) => warn!("failed to boostrap"),
                                     }
                             });

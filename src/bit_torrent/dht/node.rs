@@ -33,8 +33,16 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(addr: &str) -> Result<Self, NodeError> {
-        // NOTE: generate a public key
+    pub fn new(key: Key, addr: &str) -> Result<Self, NodeError> {
+        let node = Self {
+            id: key,
+            addr: addr.parse()?,
+        };
+
+        Ok(node)
+    }
+
+    pub fn random(addr: &str) -> Result<Self, NodeError> {
         let mut random_bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut random_bytes);
         let id = Key::new(&random_bytes);

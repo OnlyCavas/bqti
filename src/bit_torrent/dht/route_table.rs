@@ -40,7 +40,7 @@ impl RouteTable {
 
         for i in 0..KEY_ID_LENGTH {
             for j in (0..8).rev() {
-                if (distance.0[i] >> j) & 1 != 0 {
+                if (distance.id()[i] >> j) & 1 != 0 {
                     return i * 8 + (7 - j);
                 }
             }

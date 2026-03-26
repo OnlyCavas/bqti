@@ -6,12 +6,15 @@ use std::{
 };
 
 use futures::{StreamExt, stream::FuturesUnordered};
+use rand::RngExt;
 use thiserror::Error;
 use tokio::{sync::RwLock, time::sleep};
 
 use crate::{
+    bit_torrent::certs::{CertError, KeyIdentity, PubKeyCert, Signer, Verifier},
     dht::{
         BootStrap, Key, Node, OrdDistance, RequestId, RpcError,
+        auth::{AuthError, AuthSecret, DIFFICULTY, PoW, SecretSalt},
         message::{
             DhtMessageError, DhtRequest, DhtResponse, KademliaData, PeerResponse, RpcRequest,
         },
@@ -20,12 +23,16 @@ use crate::{
         rpc::RpcHandler,
     },
     network::ConnectionManagerError,
+    types::Hash32Bytes,
 };
 
 #[derive(Debug, Error)]
 pub enum KademliaError {
     #[error(transparent)]
     NodeError(#[from] node::NodeError),
+
+    #[error("handshake failed")]
+    AuthError(#[from] AuthError),
 
     #[error("failed to connect over to bootstrap node")]
     BootstrapFailed(),
@@ -37,6 +44,9 @@ pub enum KademliaError {
     ConnectionError(#[from] ConnectionManagerError),
 
     #[error(transparent)]
+    CertErr(#[from] CertError),
+
+    #[error(transparent)]
     DhtMessageError(#[from] DhtMessageError),
 
     #[error(transparent)]
@@ -44,19 +54,26 @@ pub enum KademliaError {
 }
 
 pub struct Kademlia {
-    // NOTE it should hold it's leaf certificate -> KeyIdentity
+    certificate: KeyIdentity,
+    secret_salt: Arc<RwLock<SecretSalt>>,
+
     rpc_handler: Arc<RpcHandler>,
     pub route_table: Arc<RwLock<RouteTable>>,
     pub store: Arc<RwLock<HashMap<Key, KademliaData>>>,
 }
 
 impl Kademlia {
-    pub fn new(addr: &str, rpc_handler: Arc<RpcHandler>) -> Result<Self, KademliaError> {
-        let host = Node::new(addr)?; // FIX it's creating a new id, each time, that's why is
-        // failing
+    pub fn new(
+        addr: &str,
+        rpc_handler: Arc<RpcHandler>,
+        certificate: KeyIdentity,
+    ) -> Result<Self, KademliaError> {
+        let host = Node::new(Key::new(certificate.pub_key()), addr)?;
         let route_table = RouteTable::new(host.clone());
 
         let dht = Self {
+            certificate,
+            secret_salt: Arc::new(RwLock::new(SecretSalt::new())),
             rpc_handler: rpc_handler,
             route_table: Arc::new(RwLock::new(route_table)),
             store: Arc::new(RwLock::new(HashMap::new())),
@@ -90,18 +107,12 @@ impl Kademlia {
         }
     }
 
-    // TODO join network, with pow (12 - 16 bits of difficulty)
+    // FIXME maybe do this in a seperate thread if not will block while doing the POW
     pub async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
-        let bootstrap = bootstrap.node();
+        let signed_secret = self.request_challange(bootstrap).await?;
+        let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
 
-        let Ok(_) = self.ping(bootstrap).await else {
-            return Err(KademliaError::BootstrapFailed());
-        };
-
-        // 1. TODO request pow challange -> rpc ask_challange
-        // 2. TODO submit pow challange -> rpc submit_challange
-
-        self.acknowledge(bootstrap).await;
+        self.acknowledge(&bootstrap).await;
 
         let host_id = {
             let route_table = self.route_table.read().await;
@@ -112,6 +123,83 @@ impl Kademlia {
         self.refresh_buckets(Duration::from_millis(50)).await;
 
         Ok(())
+    }
+
+    async fn request_challange(&self, bootstrap: &BootStrap) -> Result<PoW, KademliaError> {
+        let bootstrap = bootstrap.node();
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        let result = self
+            .rpc_handler
+            .request(
+                bootstrap,
+                DhtRequest::RequestChallange {
+                    sender_id: host_id.clone(),
+                },
+                Duration::from_secs(5),
+            )
+            .await?;
+
+        let DhtResponse::Challange {
+            challange,
+            difficulty,
+        } = result
+        else {
+            return Err(RpcError::UnexpectedResponse)?;
+        };
+
+        let mut secret = PoW::generate(host_id.pub_key(), challange, difficulty);
+        secret.sign(&self.certificate)?;
+
+        Ok(secret)
+    }
+
+    async fn submit_challange(
+        &self,
+        bootstrap: &BootStrap,
+        secret: &PoW,
+    ) -> Result<Node, KademliaError> {
+        let bootstrap = bootstrap.node();
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        let Some(signature) = secret.signature.clone() else {
+            return Err(AuthError::UnAuthorized())?;
+        };
+
+        let result = self
+            .rpc_handler
+            .request(
+                bootstrap,
+                DhtRequest::SubmitChallange {
+                    sender_id: host_id,
+                    challange: secret.value,
+                    nonce: secret.nonce,
+                    signature: signature,
+                },
+                Duration::from_secs(5),
+            )
+            .await?;
+
+        let DhtResponse::Welcome {
+            bootstrap_id,
+            nonce,
+            signature,
+        } = result
+        else {
+            return Err(RpcError::UnexpectedResponse)?;
+        };
+
+        if !KeyIdentity::verify(bootstrap_id.pub_key(), &nonce.to_be_bytes(), &signature) {
+            return Err(AuthError::RoguePeer())?;
+        }
+
+        Ok(Node::from_socket(bootstrap_id, bootstrap.addr))
     }
 
     async fn refresh_buckets(&self, interval: Duration) {
@@ -485,6 +573,25 @@ impl Kademlia {
                 self.handle_find_value(request.id, &Node::from_socket(sender_id, src), key)
                     .await
             }
+            DhtRequest::RequestChallange { sender_id } => {
+                self.handle_request_challange(request.id, &Node::from_socket(sender_id, src))
+                    .await
+            }
+            DhtRequest::SubmitChallange {
+                sender_id,
+                challange,
+                nonce,
+                signature,
+            } => {
+                self.handle_submit_challange(
+                    request.id,
+                    &Node::from_socket(sender_id, src),
+                    challange,
+                    nonce,
+                    signature,
+                )
+                .await
+            }
         }
     }
 
@@ -613,6 +720,79 @@ impl Kademlia {
 
         self.rpc_handler
             .reply(&sender, request_id, response)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_request_challange(
+        &self,
+        request_id: RequestId,
+        sender: &Node,
+    ) -> Result<(), KademliaError> {
+        let difficulty = DIFFICULTY;
+        let secret_salt = {
+            let secret = self.secret_salt.read().await;
+            *secret
+        };
+
+        let challange: u32 =
+            SecretSalt::calculate_challenge(&sender.id.pub_key(), &sender.addr.ip(), &secret_salt);
+
+        self.rpc_handler
+            .reply(
+                &sender,
+                request_id,
+                DhtResponse::Challange {
+                    challange,
+                    difficulty,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_submit_challange(
+        &self,
+        request_id: RequestId,
+        sender: &Node,
+        pow: Hash32Bytes,
+        nonce: u32,
+        pow_sign: Vec<u8>,
+    ) -> Result<(), KademliaError> {
+        let secret_salt = {
+            let secret = self.secret_salt.read().await;
+            *secret
+        };
+
+        let host_id = {
+            let route_table = self.route_table.read().await;
+            route_table.host.id.clone()
+        };
+
+        let challange =
+            SecretSalt::calculate_challenge(sender.id.pub_key(), &sender.addr.ip(), &secret_salt);
+
+        let secret = PoW::new(pow, challange, nonce, DIFFICULTY, pow_sign);
+
+        if !secret.verify(sender.id.pub_key()) {
+            return Err(AuthError::RoguePeer())?;
+        }
+
+        let bootstrap_nonce: u32 = rand::rng().random();
+        let bootstrap_sign = self.certificate.sign(&bootstrap_nonce.to_be_bytes())?;
+
+        self.rpc_handler
+            .reply(
+                &sender,
+                request_id,
+                DhtResponse::Welcome {
+                    bootstrap_id: host_id,
+                    nonce: bootstrap_nonce,
+                    signature: bootstrap_sign,
+                },
+            )
             .await?;
 
         Ok(())

@@ -10,15 +10,29 @@ pub trait OrdDistance {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct Key(pub Hash32Bytes);
+pub struct Key {
+    id: Hash32Bytes,
+    pub_key: Vec<u8>,
+}
 
 impl Key {
     pub fn new(pub_key: &[u8]) -> Self {
-        Key(*Sha256Hash::digest(pub_key).as_bytes())
+        Key {
+            id: *Sha256Hash::digest(pub_key).as_bytes(),
+            pub_key: pub_key.to_vec(),
+        }
+    }
+
+    pub fn id(&self) -> [u8; 32] {
+        self.id
+    }
+
+    pub fn pub_key(&self) -> &[u8] {
+        &self.pub_key
     }
 
     pub fn randomize(&self, index: usize) -> Self {
-        let mut result = self.0;
+        let mut result = self.id;
 
         let byte_idx = index / 8;
         let bit_idx = index % 8;
@@ -37,11 +51,11 @@ impl Key {
             }
         }
 
-        Key(result)
+        Key::new(&result)
     }
 
     pub fn hex(&self) -> String {
-        hex::encode(self.0)
+        hex::encode(self.id)
     }
 }
 
@@ -50,10 +64,10 @@ impl OrdDistance for Key {
         let mut distance = [0; KEY_ID_LENGTH];
 
         for i in 0..KEY_ID_LENGTH {
-            distance[i] = self.0[i] ^ other.0[i];
+            distance[i] = self.id[i] ^ other.id[i];
         }
 
-        Key(distance)
+        Key::new(&distance)
     }
 }
 
@@ -65,40 +79,47 @@ impl PartialOrd for Key {
 
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
+        self.id.cmp(&other.id)
     }
 }
 
 impl Serialize for Key {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_bytes(&self.0)
+        use serde::ser::SerializeTuple;
+
+        let mut t = s.serialize_tuple(2)?;
+        t.serialize_element(&self.id)?;
+        t.serialize_element(serde_bytes::Bytes::new(&self.pub_key))?;
+        t.end()
     }
 }
 
 impl<'de> Deserialize<'de> for Key {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct KeyVisitor;
-
         impl<'de> serde::de::Visitor<'de> for KeyVisitor {
             type Value = Key;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "32 bytes")
+                write!(f, "a tuple of (32-byte id, public key bytes)")
             }
 
-            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Key, E> {
-                let arr: [u8; 32] = v
-                    .try_into()
-                    .map_err(|_| E::invalid_length(v.len(), &self))?;
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Key, A::Error> {
+                let id: Hash32Bytes = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::missing_field("id"))?;
 
-                Ok(Key(arr))
-            }
+                let pub_key: serde_bytes::ByteBuf = seq
+                    .next_element()?
+                    .ok_or_else(|| serde::de::Error::missing_field("pub_key"))?;
 
-            fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Key, E> {
-                self.visit_bytes(&v)
+                Ok(Key {
+                    id,
+                    pub_key: pub_key.into_vec(),
+                })
             }
         }
 
-        d.deserialize_bytes(KeyVisitor)
+        d.deserialize_tuple(2, KeyVisitor)
     }
 }

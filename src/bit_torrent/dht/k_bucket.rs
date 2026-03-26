@@ -76,11 +76,11 @@ impl KBucket {
         let byte_index = bit_index / 8;
         let bit_offset = 7 - (bit_index % 8);
 
-        if byte_index >= id.0.len() {
+        if byte_index >= id.id().len() {
             return false;
         }
 
-        (id.0[byte_index] >> bit_offset) & 1 == 1
+        (id.id()[byte_index] >> bit_offset) & 1 == 1
     }
 
     pub fn get_nodes(&self) -> impl Iterator<Item = &Node> {

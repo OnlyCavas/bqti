@@ -1,3 +1,4 @@
+mod auth;
 mod k_bucket;
 mod kademlia;
 mod key_id;

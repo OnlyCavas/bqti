@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    bit_torrent::bencode::{self, BencodeError},
+    bit_torrent::{
+        bencode::{self, BencodeError},
+        certs::Signature,
+    },
     dht::{Key, Node, RequestId},
     network::Message,
 };
@@ -73,6 +76,15 @@ pub enum DhtRequest {
         key: Key,
         data: KademliaData,
     },
+    RequestChallange {
+        sender_id: Key,
+    },
+    SubmitChallange {
+        sender_id: Key,
+        challange: [u8; 32],
+        nonce: u32,
+        signature: Signature,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +111,15 @@ pub enum DhtResponse {
     Peers {
         receiver_id: Key,
         peers: Vec<PeerResponse>,
+    },
+    Challange {
+        challange: u32,
+        difficulty: u32,
+    },
+    Welcome {
+        bootstrap_id: Key,
+        nonce: u32,
+        signature: Signature,
     },
 }
 
