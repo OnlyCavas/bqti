@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::{
-    commands::{connect::ConnectArgs, serve::ServeArgs},
+    commands::{certs::CertArgs, connect::ConnectArgs, serve::ServeArgs},
     torrent::Torrent,
 };
 
@@ -20,6 +20,7 @@ pub struct Cli {
 pub enum SubCommand {
     Serve(ServeArgs),
     Connect(ConnectArgs),
+    Certs(CertArgs),
     Torrent {
         #[command(subcommand)]
         torrent: Torrent,

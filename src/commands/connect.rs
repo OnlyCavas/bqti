@@ -1,7 +1,5 @@
 use crate::{
-    network::{
-        ConnectionManager, LeafCert, ManagerOptions, Message, Packet, Peer, QuicEndpointBuilder,
-    },
+    network::{ConnectionManager, ManagerOptions, Message, Packet, Peer, QuicEndpointBuilder},
     utils,
 };
 
@@ -21,16 +19,13 @@ pub async fn run(args: ConnectArgs) -> Result<()> {
     let my_self = Peer::new("peer-a", &args.addr)?;
     let other_self = Peer::new("peer-b", &args.to)?;
 
-    let root_cert = utils::certs::load_or_generate_root_ca().await?;
-    let (root_cert_der, _) = root_cert.cert.der();
-
-    let leaf_cert = LeafCert::generate(vec![other_self.id.clone()], &root_cert)?;
-    let (leaf_cert_der, leaf_priv_key) = leaf_cert.cert.der();
+    let ca_root = utils::certs::make_ca_root().await?;
+    let leaf_quic = ca_root.leaf("QUIC", false)?;
 
     let endpoint_config = QuicEndpointBuilder::new(
         my_self.address,
-        vec![leaf_cert_der, root_cert_der],
-        leaf_priv_key,
+        vec![leaf_quic.cert_der(), ca_root.cert_der()],
+        leaf_quic.key_der(),
     );
 
     let (manager, mut stream_rx) =

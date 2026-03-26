@@ -5,6 +5,7 @@ use crate::bit_torrent::{
 
 mod bencode;
 mod bqti;
+pub mod certs;
 pub mod dht;
 mod error;
 pub mod hasher;

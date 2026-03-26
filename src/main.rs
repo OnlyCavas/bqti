@@ -2,6 +2,7 @@ use std::io;
 
 use anyhow::Result;
 use bqti::{
+    certs,
     cli::{Cli, SubCommand},
     connect, serve,
     torrent::{Torrent, create, inspect, validate},
@@ -25,6 +26,7 @@ async fn main() -> Result<()> {
     if let Some(subcommand) = cli.subcommand {
         match subcommand {
             SubCommand::Serve(args) => serve::run(args).await?,
+            SubCommand::Certs(args) => certs::run(args).await?,
             SubCommand::Connect(args) => connect::run(args).await?,
             SubCommand::Torrent { torrent } => match torrent {
                 Torrent::Inspect { torrent } => inspect(torrent, cli.verbose)?,

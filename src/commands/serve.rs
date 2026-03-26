@@ -5,7 +5,7 @@ use clap::Parser;
 
 use crate::{
     Bqti,
-    network::{ConnectionManager, LeafCert, ManagerOptions, Peer, QuicEndpointBuilder},
+    network::{ConnectionManager, ManagerOptions, Peer, QuicEndpointBuilder},
     utils::{self},
 };
 
@@ -17,17 +17,13 @@ pub struct ServeArgs {
 
 pub async fn run(args: ServeArgs) -> Result<()> {
     let my_self = Peer::new("localhost", &args.addr)?;
-
-    let root_cert = utils::certs::load_or_generate_root_ca().await?;
-    let (root_cert_der, _) = root_cert.cert.der();
-
-    let leaf_cert = LeafCert::generate(vec![my_self.id], &root_cert)?;
-    let (leaf_cert_der, leaf_priv_key) = leaf_cert.cert.der();
+    let ca_root = utils::certs::make_ca_root().await?;
+    let leaf_quic = ca_root.leaf("localhost", false)?;
 
     let endpoint_config = QuicEndpointBuilder::new(
         my_self.address,
-        vec![leaf_cert_der, root_cert_der],
-        leaf_priv_key,
+        vec![leaf_quic.cert_der(), ca_root.cert_der()],
+        leaf_quic.key_der(),
     );
 
     let (manager, stream_rx) = ConnectionManager::new(endpoint_config, ManagerOptions::default())?;

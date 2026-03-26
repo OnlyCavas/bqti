@@ -9,5 +9,5 @@ pub mod cli;
 pub mod utils;
 
 pub use bit_torrent::*;
-pub use commands::{connect, serve, torrent};
+pub use commands::{certs, connect, serve, torrent};
 pub use error::BQTIError;

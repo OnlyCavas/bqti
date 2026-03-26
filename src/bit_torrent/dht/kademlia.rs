@@ -44,6 +44,7 @@ pub enum KademliaError {
 }
 
 pub struct Kademlia {
+    // NOTE it should hold it's leaf certificate -> KeyIdentity
     rpc_handler: Arc<RpcHandler>,
     pub route_table: Arc<RwLock<RouteTable>>,
     pub store: Arc<RwLock<HashMap<Key, KademliaData>>>,
