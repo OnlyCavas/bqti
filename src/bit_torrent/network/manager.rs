@@ -165,8 +165,29 @@ impl ConnectionManager {
         }
     }
 
+    fn is_self_connection(&self, peer_addr: &SocketAddr, local_addr: &SocketAddr) -> bool {
+        if peer_addr.port() != local_addr.port() {
+            return false;
+        }
+
+        let peer_ip = peer_addr.ip();
+        let local_ip = local_addr.ip();
+
+        peer_ip == local_ip || peer_ip.is_loopback() || local_ip.is_unspecified()
+    }
+
     pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {
         let peer_id = peer.address.to_string();
+        let local_addr = self
+            .endpoint
+            .local_addr()
+            .map_err(|_| ConnectionManagerError::LocalIpError())?;
+
+        if self.is_self_connection(&peer.address, &local_addr) {
+            return Err(ConnectionManagerError::EstablishError(
+                local_addr.to_string(),
+            ))?;
+        }
 
         {
             let conns = self.connections.read().await;

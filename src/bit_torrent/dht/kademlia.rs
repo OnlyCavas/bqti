@@ -90,10 +90,7 @@ impl Kademlia {
             };
 
             match insert_result {
-                InsertResult::None => {
-                    warn!("failed to insert into route table");
-                    break;
-                }
+                InsertResult::None => break,
                 InsertResult::Inserted => break,
                 InsertResult::Split => continue,
                 InsertResult::Ping(old, new) => match self.ping(&old).await {

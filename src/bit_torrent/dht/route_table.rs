@@ -56,6 +56,10 @@ impl RouteTable {
             return InsertResult::None;
         };
 
+        if node.id == self.host.id {
+            return InsertResult::None;
+        }
+
         if !kbucket.is_full() {
             kbucket.insert(node.clone());
             return InsertResult::Inserted;
