@@ -60,6 +60,17 @@ pub enum KademliaData {
     Value(Vec<u8>),
 }
 
+impl KademliaData {
+    pub fn merge(&mut self, other: KademliaData) {
+        match (self, other) {
+            (KademliaData::Peers(existing), KademliaData::Peers(new)) => {
+                existing.extend(new);
+            }
+            (existing, new) => *existing = new,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthDhtRequest {
     Ping,

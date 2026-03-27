@@ -29,7 +29,7 @@ impl Bqti {
         let kademlia = Kademlia::new(addr, rpc_handler.clone(), certificate)?;
 
         let bqti = Self {
-            kademlia: Arc::new(kademlia),
+            kademlia,
             connection_manager,
             rpc_handler,
         };

@@ -19,7 +19,7 @@ use crate::{
 pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
 pub const DIFFICULTY: u32 = 16;
 
-pub trait Challange {
+pub trait Challenge {
     fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> Self;
 }
 
@@ -28,7 +28,8 @@ pub trait Evidence {
 }
 
 pub trait Authorizable: Evidence {
-    fn verify(&self, pub_key: &[u8]) -> bool;
+    fn verify_for(&self, pub_key: &[u8]) -> bool;
+    fn verify(&self) -> bool;
     fn is_expired(&self) -> bool;
 }
 
@@ -109,11 +110,15 @@ impl Evidence for Token {
 }
 
 impl Authorizable for Token {
-    fn verify(&self, pub_key: &[u8]) -> bool {
+    fn verify_for(&self, pub_key: &[u8]) -> bool {
         if &self.peer != pub_key {
             return false;
         }
 
+        self.verify()
+    }
+
+    fn verify(&self) -> bool {
         if self.is_expired() {
             return false;
         }
@@ -224,7 +229,7 @@ impl PoW {
     }
 }
 
-impl Challange for PoW {
+impl Challenge for PoW {
     fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> PoW {
         let mut prof_of_work: [u8; 32];
         let mut nonce: u32 = 0;

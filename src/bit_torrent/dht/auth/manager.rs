@@ -1,6 +1,6 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, time::sleep};
 
 use crate::{
     bit_torrent::certs::{KeyIdentity, PublicKey},
@@ -10,22 +10,37 @@ use crate::{
     },
 };
 
+const SECRET_SALT_REFRESH_DURATION: Duration = Duration::from_secs(5);
+
 pub struct AuthManager {
     certificate: KeyIdentity,
-    secret_salt: RwLock<SecretSalt>, // NOTE implement cycle event
+    secret_salt: RwLock<SecretSalt>,
 
     tokens: RwLock<Vec<Token>>,
 }
 
 impl AuthManager {
-    pub fn new(certificate: KeyIdentity) -> Self {
-        Self {
+    pub fn new(certificate: KeyIdentity) -> Arc<Self> {
+        let auth_manager = Arc::new(Self {
             certificate,
             secret_salt: RwLock::new(SecretSalt::new()),
             tokens: RwLock::new(Vec::new()),
-        }
+        });
 
-        // NOTE return weak reference to start
+        let weak_ptr = Arc::downgrade(&auth_manager);
+        tokio::spawn(async move {
+            loop {
+                sleep(SECRET_SALT_REFRESH_DURATION).await;
+
+                let Some(manager) = weak_ptr.upgrade() else {
+                    return;
+                };
+
+                *manager.secret_salt.write().await = SecretSalt::new();
+            }
+        });
+
+        auth_manager
     }
 
     pub async fn challange(&self, pub_key: &[u8], ip: &IpAddr) -> u32 {
@@ -50,7 +65,13 @@ impl AuthManager {
 
     pub async fn store_token(&self, token: Token) {
         let mut held_tokens = self.tokens.write().await;
-        held_tokens.push(token);
+        held_tokens.retain(|t| !t.is_expired());
+
+        if let Some(existing) = held_tokens.iter_mut().find(|t| t.issuer == token.issuer) {
+            *existing = token;
+        } else {
+            held_tokens.push(token);
+        }
     }
 
     pub async fn best_token(&self) -> Option<Token> {

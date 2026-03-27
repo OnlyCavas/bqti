@@ -6,6 +6,7 @@ mod message;
 mod node;
 mod route_table;
 mod rpc;
+mod store;
 
 pub type RequestId = u64;
 

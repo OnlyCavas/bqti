@@ -1,9 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
@@ -13,7 +8,7 @@ use crate::{
     bit_torrent::certs::{CertError, KeyIdentity, PublicKey},
     dht::{
         BootStrap, DhtPacket, Key, Node, OrdDistance, RequestId, RpcError,
-        auth::{AuthError, AuthManager, Authorizable, Challange, DIFFICULTY, Evidence, PoW},
+        auth::{AuthError, AuthManager, Authorizable, Challenge, DIFFICULTY, Evidence, PoW},
         message::{
             AuthDhtRequest, AuthRpcRequest, DhtMessageError, DhtRequest, DhtResponse, KademliaData,
             PeerResponse, RpcRequest,
@@ -21,6 +16,7 @@ use crate::{
         node,
         route_table::{InsertResult, KBUCKET_MAX, RouteTable},
         rpc::RpcHandler,
+        store::{DHTStore, PRUNE_CHECK_DURATION},
     },
     network::ConnectionManagerError,
     types::Hash32Bytes,
@@ -56,8 +52,8 @@ pub enum KademliaError {
 pub struct Kademlia {
     auth: Arc<AuthManager>,
     rpc_handler: Arc<RpcHandler>,
+    store: Arc<RwLock<DHTStore>>,
     pub route_table: Arc<RwLock<RouteTable>>,
-    pub store: Arc<RwLock<HashMap<Key, KademliaData>>>,
 }
 
 impl Kademlia {
@@ -65,16 +61,35 @@ impl Kademlia {
         addr: &str,
         rpc_handler: Arc<RpcHandler>,
         certificate: KeyIdentity,
-    ) -> Result<Self, KademliaError> {
+    ) -> Result<Arc<Self>, KademliaError> {
         let host = Node::new(Key::new(certificate.pub_key()), addr)?;
         let route_table = RouteTable::new(host.clone());
 
-        let dht = Self {
-            auth: Arc::new(AuthManager::new(certificate)),
+        let dht = Arc::new(Self {
+            auth: AuthManager::new(certificate),
             rpc_handler: rpc_handler,
             route_table: Arc::new(RwLock::new(route_table)),
-            store: Arc::new(RwLock::new(HashMap::new())),
-        };
+            store: Arc::new(RwLock::new(DHTStore::new())),
+        });
+
+        let weak_ptr = Arc::downgrade(&dht.store);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(PRUNE_CHECK_DURATION);
+
+            loop {
+                interval.tick().await;
+
+                let Some(dht_lock) = weak_ptr.upgrade() else {
+                    info!("prunning stopped");
+                    return;
+                };
+
+                let mut store = dht_lock.write().await;
+                store.prune();
+
+                drop(store);
+            }
+        });
 
         Ok(dht)
     }
@@ -202,7 +217,7 @@ impl Kademlia {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
-        if !token.verify(&host_id.pub_key()) {
+        if !token.verify_for(&host_id.pub_key()) {
             return Err(AuthError::RoguePeer())?;
         }
 
@@ -226,8 +241,6 @@ impl Kademlia {
             sleep(interval).await;
         }
     }
-
-    // TODO implement tokens, on store and find_node and find_value
 
     // client
     pub async fn ping(&self, target: &Node) -> Result<(), KademliaError> {
@@ -528,11 +541,10 @@ impl Kademlia {
     ) -> Result<(), KademliaError> {
         match packet {
             DhtPacket::Request { token, envelop } => {
-                // FIXME must find way to trust the boostrap of others!
-                // if !token.verify(&self.certificate.pub_key()) {
-                //     return Err(AuthError::InvalidToken())?;
-                // }
-                //
+                if !token.verify() {
+                    return Err(AuthError::InvalidToken())?;
+                }
+
                 self.handle_request(token.sender(), envelop, src).await
             }
             DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src).await,
