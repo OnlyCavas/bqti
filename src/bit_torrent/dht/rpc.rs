@@ -16,7 +16,11 @@ use tokio::{
 use crate::{
     dht::{
         Node, RequestId,
-        message::{DhtMessageError, DhtPacket, DhtRequest, DhtResponse, RpcRequest, RpcResponse},
+        auth::Token,
+        message::{
+            AuthDhtRequest, DhtMessageError, DhtPacket, DhtRequest, DhtResponse, RpcEnvelope,
+            RpcRequest, RpcResponse,
+        },
     },
     network::{ConnectionManager, ConnectionManagerError, Message},
 };
@@ -58,9 +62,8 @@ impl RpcHandler {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub async fn dispatch(&self, packet: DhtPacket) -> Option<RpcRequest> {
+    pub async fn dispatch(&self, packet: DhtPacket) -> Option<DhtPacket> {
         match packet {
-            DhtPacket::Request(request) => Some(request),
             DhtPacket::Response(response) => {
                 let pending_result = {
                     let mut pending = self.pending.lock().await;
@@ -78,6 +81,7 @@ impl RpcHandler {
 
                 None
             }
+            packet => Some(packet),
         }
     }
 
@@ -100,18 +104,47 @@ impl RpcHandler {
         Ok(())
     }
 
-    // FIX if timeout exceded, breaks the connection flow
-    pub async fn request(
+    pub async fn request_handshake(
         &self,
         peer: &Node,
-        request: DhtRequest,
+        payload: DhtRequest,
         tout: Duration,
+    ) -> Result<DhtResponse, RpcError> {
+        self.handle_request(peer, tout, |id| {
+            DhtPacket::HandShake(RpcEnvelope::new(id, payload))
+        })
+        .await
+    }
+
+    pub async fn request_auth(
+        &self,
+        peer: &Node,
+        token: Option<Token>,
+        payload: AuthDhtRequest,
+        tout: Duration,
+    ) -> Result<DhtResponse, RpcError> {
+        let Some(token) = token else {
+            return Err(RpcError::UnexpectedResponse);
+        };
+
+        self.handle_request(peer, tout, |id| DhtPacket::Request {
+            token,
+            envelop: RpcEnvelope::new(id, payload),
+        })
+        .await
+    }
+
+    // FIX if timeout exceded, breaks the connection flow
+    pub async fn handle_request(
+        &self,
+        peer: &Node,
+        tout: Duration,
+        make_packet: impl FnOnce(RequestId) -> DhtPacket,
     ) -> Result<DhtResponse, RpcError> {
         let peer = peer.into();
 
         let id = self.alloc_id();
-        let envelope = RpcRequest::new(id, request);
-        let packet = DhtPacket::Request(envelope);
+        let packet = make_packet(id);
 
         let (tx, rx) = oneshot::channel::<DhtResponse>();
 

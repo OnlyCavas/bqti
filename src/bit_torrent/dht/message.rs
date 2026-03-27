@@ -8,7 +8,7 @@ use crate::{
         bencode::{self, BencodeError},
         certs::Signature,
     },
-    dht::{Key, Node, RequestId},
+    dht::{Key, Node, RequestId, auth::Token},
     network::Message,
 };
 
@@ -34,6 +34,8 @@ pub struct RpcEnvelope<T> {
 }
 
 pub type RpcRequest = RpcEnvelope<DhtRequest>;
+pub type AuthRpcRequest = RpcEnvelope<AuthDhtRequest>;
+
 pub type RpcResponse = RpcEnvelope<DhtResponse>;
 
 impl<T: Serialize> RpcEnvelope<T> {
@@ -59,23 +61,31 @@ pub enum KademliaData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AuthDhtRequest {
+    Ping,
+    FindNode { lookup_id: Key },
+    FindValue { key: Key },
+    Store { key: Key, data: KademliaData },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtRequest {
-    Ping {
-        sender_id: Key,
-    },
-    FindNode {
-        sender_id: Key,
-        lookup_id: Key,
-    },
-    FindValue {
-        sender_id: Key,
-        key: Key,
-    },
-    Store {
-        sender_id: Key,
-        key: Key,
-        data: KademliaData,
-    },
+    // Ping {
+    //     sender_id: Key,
+    // },
+    // FindNode {
+    //     sender_id: Key,
+    //     lookup_id: Key,
+    // },
+    // FindValue {
+    //     sender_id: Key,
+    //     key: Key,
+    // },
+    // Store {
+    //     sender_id: Key,
+    //     key: Key,
+    //     data: KademliaData,
+    // },
     RequestChallange {
         sender_id: Key,
     },
@@ -117,15 +127,17 @@ pub enum DhtResponse {
         difficulty: u32,
     },
     Welcome {
-        bootstrap_id: Key,
-        nonce: u32,
-        signature: Signature,
+        token: Token,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtPacket {
-    Request(RpcRequest),
+    Request {
+        token: Token,
+        envelop: AuthRpcRequest,
+    },
+    HandShake(RpcRequest),
     Response(RpcResponse),
 }
 

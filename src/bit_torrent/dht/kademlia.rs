@@ -6,17 +6,20 @@ use std::{
 };
 
 use futures::{StreamExt, stream::FuturesUnordered};
-use rand::RngExt;
 use thiserror::Error;
 use tokio::{sync::RwLock, time::sleep};
 
 use crate::{
-    bit_torrent::certs::{CertError, KeyIdentity, PubKeyCert, Signer, Verifier},
+    bit_torrent::certs::{CertError, KeyIdentity, PublicKey},
     dht::{
-        BootStrap, Key, Node, OrdDistance, RequestId, RpcError,
-        auth::{AuthError, AuthSecret, DIFFICULTY, PoW, SecretSalt},
+        BootStrap, DhtPacket, Key, Node, OrdDistance, RequestId, RpcError,
+        auth::{
+            AuthError, Authorizable, Challange, ChallangeProof, DIFFICULTY, Evidence, PoW,
+            SecretSalt, Token,
+        },
         message::{
-            DhtMessageError, DhtRequest, DhtResponse, KademliaData, PeerResponse, RpcRequest,
+            AuthDhtRequest, AuthRpcRequest, DhtMessageError, DhtRequest, DhtResponse, KademliaData,
+            PeerResponse, RpcRequest,
         },
         node,
         route_table::{InsertResult, KBUCKET_MAX, RouteTable},
@@ -57,6 +60,8 @@ pub struct Kademlia {
     certificate: KeyIdentity,
     secret_salt: Arc<RwLock<SecretSalt>>,
 
+    // NOTE session manager -> where it stores the current session with the current array of peers
+    // and their tokens
     rpc_handler: Arc<RpcHandler>,
     pub route_table: Arc<RwLock<RouteTable>>,
     pub store: Arc<RwLock<HashMap<Key, KademliaData>>>,
@@ -131,7 +136,7 @@ impl Kademlia {
 
         let result = self
             .rpc_handler
-            .request(
+            .request_handshake(
                 bootstrap,
                 DhtRequest::RequestChallange {
                     sender_id: host_id.clone(),
@@ -171,10 +176,10 @@ impl Kademlia {
 
         let result = self
             .rpc_handler
-            .request(
+            .request_handshake(
                 bootstrap,
                 DhtRequest::SubmitChallange {
-                    sender_id: host_id,
+                    sender_id: host_id.clone(),
                     challange: secret.value,
                     nonce: secret.nonce,
                     signature: signature,
@@ -183,20 +188,15 @@ impl Kademlia {
             )
             .await?;
 
-        let DhtResponse::Welcome {
-            bootstrap_id,
-            nonce,
-            signature,
-        } = result
-        else {
+        let DhtResponse::Welcome { token } = result else {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
-        if !KeyIdentity::verify(bootstrap_id.pub_key(), &nonce.to_be_bytes(), &signature) {
+        if !token.verify(&host_id.pub_key()) {
             return Err(AuthError::RoguePeer())?;
         }
 
-        Ok(Node::from_socket(bootstrap_id, bootstrap.addr))
+        Ok(Node::from_socket(Key::new(&token.issuer), bootstrap.addr))
     }
 
     async fn refresh_buckets(&self, interval: Duration) {
@@ -218,16 +218,12 @@ impl Kademlia {
 
     // client
     pub async fn ping(&self, target: &Node) -> Result<(), KademliaError> {
-        let host_id = {
-            let route_table = self.route_table.read().await;
-            route_table.host.id.clone()
-        };
-
         let result = self
             .rpc_handler
-            .request(
+            .request_auth(
                 target,
-                DhtRequest::Ping { sender_id: host_id },
+                self.token.clone(),
+                AuthDhtRequest::Ping,
                 Duration::from_secs(5),
             )
             .await?;
@@ -346,17 +342,12 @@ impl Kademlia {
         target: &Node,
         lookup_key: Key,
     ) -> Result<Vec<Node>, KademliaError> {
-        let host_id = {
-            let route_table = self.route_table.read().await;
-            route_table.host.id.clone()
-        };
-
         let result = self
             .rpc_handler
-            .request(
+            .request_auth(
                 target,
-                DhtRequest::FindNode {
-                    sender_id: host_id,
+                self.token.clone(),
+                AuthDhtRequest::FindNode {
                     lookup_id: lookup_key,
                 },
                 Duration::from_secs(5),
@@ -389,26 +380,18 @@ impl Kademlia {
         }
 
         let mut future_stores = FuturesUnordered::new();
-        let host_id = {
-            let route_table = self.route_table.read().await;
-            route_table.host.id.clone()
-        };
 
         for target in closest_nodes {
-            let host_id = host_id.clone();
             let key = key.clone();
             let value = value.clone();
 
             future_stores.push(async move {
                 let res = self
                     .rpc_handler
-                    .request(
+                    .request_auth(
                         &target,
-                        DhtRequest::Store {
-                            sender_id: host_id,
-                            key,
-                            data: value,
-                        },
+                        self.token.clone(),
+                        AuthDhtRequest::Store { key, data: value },
                         Duration::from_secs(5),
                     )
                     .await;
@@ -474,17 +457,14 @@ impl Kademlia {
 
             for target in request_batch {
                 visited_nodes.insert(target.id.clone());
-                let host_id = host_id.clone();
 
                 futures_rpcs.push(async move {
                     let result = self
                         .rpc_handler
-                        .request(
+                        .request_auth(
                             &target,
-                            DhtRequest::FindValue {
-                                sender_id: host_id,
-                                key: key.clone(),
-                            },
+                            self.token.clone(),
+                            AuthDhtRequest::FindValue { key: key.clone() },
                             Duration::from_secs(5),
                         )
                         .await;
@@ -540,36 +520,31 @@ impl Kademlia {
 
     // TODO implement PEX
 
-    // backend
-    pub async fn handle_request(
+    pub async fn handle_packet(
+        &self,
+        packet: DhtPacket,
+        src: SocketAddr,
+    ) -> Result<(), KademliaError> {
+        match packet {
+            DhtPacket::Request { token, envelop } => {
+                // FIXME must find way to trust the boostrap of others!
+                // if !token.verify(&self.certificate.pub_key()) {
+                //     return Err(AuthError::InvalidToken())?;
+                // }
+                //
+                self.handle_request(token.sender(), envelop, src).await
+            }
+            DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src).await,
+            _ => panic!("shouldn't receive any response packages"),
+        }
+    }
+
+    async fn handle_handshake(
         &self,
         request: RpcRequest,
         src: SocketAddr,
     ) -> Result<(), KademliaError> {
         match request.payload {
-            DhtRequest::Ping { sender_id } => {
-                self.handle_ping(request.id, &Node::from_socket(sender_id, src))
-                    .await
-            }
-            DhtRequest::FindNode {
-                sender_id,
-                lookup_id,
-            } => {
-                self.handle_find_node(request.id, &Node::from_socket(sender_id, src), lookup_id)
-                    .await
-            }
-            DhtRequest::Store {
-                sender_id,
-                key,
-                data,
-            } => {
-                self.handle_store(request.id, &Node::from_socket(sender_id, src), key, data)
-                    .await
-            }
-            DhtRequest::FindValue { sender_id, key } => {
-                self.handle_find_value(request.id, &Node::from_socket(sender_id, src), key)
-                    .await
-            }
             DhtRequest::RequestChallange { sender_id } => {
                 self.handle_request_challange(request.id, &Node::from_socket(sender_id, src))
                     .await
@@ -588,6 +563,28 @@ impl Kademlia {
                     signature,
                 )
                 .await
+            }
+        }
+    }
+
+    async fn handle_request(
+        &self,
+        sender_id: Key,
+        request: AuthRpcRequest,
+        src: SocketAddr,
+    ) -> Result<(), KademliaError> {
+        let sender = Node::from_socket(sender_id, src);
+
+        match request.payload {
+            AuthDhtRequest::Ping => self.handle_ping(request.id, &sender).await,
+            AuthDhtRequest::FindNode { lookup_id } => {
+                self.handle_find_node(request.id, &sender, lookup_id).await
+            }
+            AuthDhtRequest::FindValue { key } => {
+                self.handle_find_value(request.id, &sender, key).await
+            }
+            AuthDhtRequest::Store { key, data } => {
+                self.handle_store(request.id, &sender, key, data).await
             }
         }
     }
@@ -763,11 +760,6 @@ impl Kademlia {
             *secret
         };
 
-        let host_id = {
-            let route_table = self.route_table.read().await;
-            route_table.host.id.clone()
-        };
-
         let challange =
             SecretSalt::calculate_challenge(sender.id.pub_key(), &sender.addr.ip(), &secret_salt);
 
@@ -777,19 +769,11 @@ impl Kademlia {
             return Err(AuthError::RoguePeer())?;
         }
 
-        let bootstrap_nonce: u32 = rand::rng().random();
-        let bootstrap_sign = self.certificate.sign(&bootstrap_nonce.to_be_bytes())?;
+        let mut token = Token::new(sender.id.pub_key(), secret.value);
+        token.sign(&self.certificate)?;
 
         self.rpc_handler
-            .reply(
-                &sender,
-                request_id,
-                DhtResponse::Welcome {
-                    bootstrap_id: host_id,
-                    nonce: bootstrap_nonce,
-                    signature: bootstrap_sign,
-                },
-            )
+            .reply(&sender, request_id, DhtResponse::Welcome { token })
             .await?;
 
         Ok(())

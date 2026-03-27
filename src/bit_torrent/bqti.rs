@@ -66,7 +66,8 @@ impl Bqti {
                                         return;
                                     };
 
-                                    let _ = kademlia.handle_request(request, source_addr).await;
+                                    let _ = kademlia.handle_packet(request, source_addr).await;
+                                    // let _ = kademlia.handle_request(request, source_addr).await;
                                 },
                                 Err(e) => error!("dht parse error: {}", e),
                             }

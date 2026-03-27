@@ -1,21 +1,34 @@
 use std::net::IpAddr;
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
     bit_torrent::certs::{KeyIdentity, Signature, Signer, Verifier},
-    types::Hash32Bytes,
+    dht::Key,
+    types::{Hash32Bytes, UnixDate},
+    utils::bqti::fetch_current_timestamp,
 };
 
+pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
 pub const DIFFICULTY: u32 = 16;
 
-pub trait AuthSecret {
+pub trait Challange {
     fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> Self;
+}
 
+pub trait Evidence {
     fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError>;
+}
 
+pub trait Authorizable: Evidence {
+    fn verify(&self, pub_key: &[u8]) -> bool;
+    fn is_expired(&self) -> bool;
+}
+
+pub trait ChallangeProof {
     fn verify(&self, pub_key: &[u8]) -> bool;
 }
 
@@ -24,8 +37,98 @@ pub enum AuthError {
     #[error("failed to prove prof of work")]
     UnAuthorized(),
 
+    #[error("authentication failed, token not trusted")]
+    InvalidToken(),
+
     #[error("public key from responder doesn't match the signature, handshake failed")]
     RoguePeer(),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Token {
+    peer: Vec<u8>,
+    pow: Hash32Bytes,
+    issued_at: UnixDate,
+    exp_at: UnixDate,
+    pub issuer: Vec<u8>,
+    signature: Option<Signature>,
+}
+
+impl Token {
+    pub fn new(peer: &[u8], pow: Hash32Bytes) -> Self {
+        let peer = peer.to_vec();
+        let pre_allocated_capacity = peer.capacity();
+
+        Self {
+            peer,
+            pow,
+            issued_at: 0,
+            exp_at: 0,
+            issuer: Vec::with_capacity(pre_allocated_capacity),
+            signature: None,
+        }
+    }
+
+    pub fn sender(&self) -> Key {
+        Key::new(&self.peer)
+    }
+
+    fn calculate_hash(&self, issuer: &[u8]) -> Hash32Bytes {
+        let mut hasher = Sha256::new();
+
+        hasher.update(&self.peer);
+        hasher.update(&self.pow);
+        hasher.update(&self.exp_at.to_be_bytes());
+        hasher.update(&self.issued_at.to_be_bytes());
+        hasher.update(&issuer);
+
+        hasher.finalize().into()
+    }
+}
+
+impl Evidence for Token {
+    fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError> {
+        let current_time = fetch_current_timestamp();
+        self.issued_at = current_time;
+        self.exp_at = self.issued_at + TOKEN_EXP_SECONDS;
+
+        let secret = self.calculate_hash(signer.pub_key());
+        let signature = signer
+            .sign(&secret)
+            .map_err(|_| AuthError::UnAuthorized())?;
+
+        self.issuer = signer.pub_key().to_vec();
+        self.signature = Some(signature);
+
+        Ok(())
+    }
+}
+
+impl Authorizable for Token {
+    fn verify(&self, pub_key: &[u8]) -> bool {
+        if &self.peer != pub_key {
+            return false;
+        }
+
+        if self.is_expired() {
+            return false;
+        }
+
+        let Some(signature) = self.signature.clone() else {
+            return false;
+        };
+
+        let secret = self.calculate_hash(&self.issuer);
+        KeyIdentity::verify(&self.issuer, &secret, &signature)
+    }
+
+    fn is_expired(&self) -> bool {
+        if self.exp_at == 0 {
+            return true;
+        }
+
+        fetch_current_timestamp() > self.exp_at
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +189,7 @@ impl PoW {
 
     fn calculate(pub_key: &[u8], challenge: u32, nonce: u32) -> [u8; 32] {
         let mut hasher = Sha256::new();
+
         hasher.update(pub_key);
         hasher.update(&challenge.to_be_bytes());
         hasher.update(&nonce.to_be_bytes());
@@ -116,7 +220,7 @@ impl PoW {
     }
 }
 
-impl AuthSecret for PoW {
+impl Challange for PoW {
     fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> PoW {
         let mut prof_of_work: [u8; 32];
         let mut nonce: u32 = 0;
@@ -137,7 +241,9 @@ impl AuthSecret for PoW {
             nonce = nonce.wrapping_add(1);
         }
     }
+}
 
+impl Evidence for PoW {
     fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError> {
         let signature = signer
             .sign(&self.value)
@@ -146,7 +252,9 @@ impl AuthSecret for PoW {
         self.signature = Some(signature);
         Ok(())
     }
+}
 
+impl ChallangeProof for PoW {
     fn verify(&self, pub_key: &[u8]) -> bool {
         let Some(signature) = self.signature.clone() else {
             return false;

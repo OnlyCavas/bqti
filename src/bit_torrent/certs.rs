@@ -16,11 +16,11 @@ pub enum CertError {
     Rcgen(#[from] rcgen::Error),
 }
 
-pub trait PubKeyCert {
+pub trait PublicKey {
     fn pub_key(&self) -> &[u8];
 }
 
-pub trait Signer {
+pub trait Signer: PublicKey {
     fn sign(&self, data: &[u8]) -> Result<Signature, CertError>;
 }
 
@@ -111,7 +111,7 @@ impl Verifier for KeyIdentity {
     }
 }
 
-impl PubKeyCert for KeyIdentity {
+impl PublicKey for KeyIdentity {
     fn pub_key(&self) -> &[u8] {
         self.key_pair.public_key_raw()
     }
