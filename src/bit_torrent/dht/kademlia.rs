@@ -13,10 +13,7 @@ use crate::{
     bit_torrent::certs::{CertError, KeyIdentity, PublicKey},
     dht::{
         BootStrap, DhtPacket, Key, Node, OrdDistance, RequestId, RpcError,
-        auth::{
-            AuthError, Authorizable, Challange, ChallangeProof, DIFFICULTY, Evidence, PoW,
-            SecretSalt, Token,
-        },
+        auth::{AuthError, AuthManager, Authorizable, Challange, DIFFICULTY, Evidence, PoW},
         message::{
             AuthDhtRequest, AuthRpcRequest, DhtMessageError, DhtRequest, DhtResponse, KademliaData,
             PeerResponse, RpcRequest,
@@ -57,11 +54,7 @@ pub enum KademliaError {
 }
 
 pub struct Kademlia {
-    certificate: KeyIdentity,
-    secret_salt: Arc<RwLock<SecretSalt>>,
-
-    // NOTE session manager -> where it stores the current session with the current array of peers
-    // and their tokens
+    auth: Arc<AuthManager>,
     rpc_handler: Arc<RpcHandler>,
     pub route_table: Arc<RwLock<RouteTable>>,
     pub store: Arc<RwLock<HashMap<Key, KademliaData>>>,
@@ -77,14 +70,31 @@ impl Kademlia {
         let route_table = RouteTable::new(host.clone());
 
         let dht = Self {
-            certificate,
-            secret_salt: Arc::new(RwLock::new(SecretSalt::new())),
+            auth: Arc::new(AuthManager::new(certificate)),
             rpc_handler: rpc_handler,
             route_table: Arc::new(RwLock::new(route_table)),
             store: Arc::new(RwLock::new(HashMap::new())),
         };
 
         Ok(dht)
+    }
+
+    async fn auth_request(
+        &self,
+        target: &Node,
+        request: AuthDhtRequest,
+        timeout: Duration,
+    ) -> Result<DhtResponse, KademliaError> {
+        let token = self
+            .auth
+            .best_token()
+            .await
+            .ok_or(AuthError::UnAuthorized())?;
+
+        Ok(self
+            .rpc_handler
+            .request(target, token, request, timeout)
+            .await?)
     }
 
     async fn acknowledge(&self, node: &Node) {
@@ -136,7 +146,7 @@ impl Kademlia {
 
         let result = self
             .rpc_handler
-            .request_handshake(
+            .handshake(
                 bootstrap,
                 DhtRequest::RequestChallange {
                     sender_id: host_id.clone(),
@@ -154,7 +164,7 @@ impl Kademlia {
         };
 
         let mut secret = PoW::generate(host_id.pub_key(), challange, difficulty);
-        secret.sign(&self.certificate)?;
+        secret.sign(self.auth.certificate())?;
 
         Ok(secret)
     }
@@ -176,7 +186,7 @@ impl Kademlia {
 
         let result = self
             .rpc_handler
-            .request_handshake(
+            .handshake(
                 bootstrap,
                 DhtRequest::SubmitChallange {
                     sender_id: host_id.clone(),
@@ -196,7 +206,10 @@ impl Kademlia {
             return Err(AuthError::RoguePeer())?;
         }
 
-        Ok(Node::from_socket(Key::new(&token.issuer), bootstrap.addr))
+        let boostrap = Node::from_socket(Key::new(&token.issuer), bootstrap.addr);
+        self.auth.store_token(token).await;
+
+        Ok(boostrap)
     }
 
     async fn refresh_buckets(&self, interval: Duration) {
@@ -219,13 +232,7 @@ impl Kademlia {
     // client
     pub async fn ping(&self, target: &Node) -> Result<(), KademliaError> {
         let result = self
-            .rpc_handler
-            .request_auth(
-                target,
-                self.token.clone(),
-                AuthDhtRequest::Ping,
-                Duration::from_secs(5),
-            )
+            .auth_request(target, AuthDhtRequest::Ping, Duration::from_secs(5))
             .await?;
 
         info!("pong");
@@ -343,10 +350,8 @@ impl Kademlia {
         lookup_key: Key,
     ) -> Result<Vec<Node>, KademliaError> {
         let result = self
-            .rpc_handler
-            .request_auth(
+            .auth_request(
                 target,
-                self.token.clone(),
                 AuthDhtRequest::FindNode {
                     lookup_id: lookup_key,
                 },
@@ -387,10 +392,8 @@ impl Kademlia {
 
             future_stores.push(async move {
                 let res = self
-                    .rpc_handler
-                    .request_auth(
+                    .auth_request(
                         &target,
-                        self.token.clone(),
                         AuthDhtRequest::Store { key, data: value },
                         Duration::from_secs(5),
                     )
@@ -460,10 +463,8 @@ impl Kademlia {
 
                 futures_rpcs.push(async move {
                     let result = self
-                        .rpc_handler
-                        .request_auth(
+                        .auth_request(
                             &target,
-                            self.token.clone(),
                             AuthDhtRequest::FindValue { key: key.clone() },
                             Duration::from_secs(5),
                         )
@@ -725,13 +726,10 @@ impl Kademlia {
         sender: &Node,
     ) -> Result<(), KademliaError> {
         let difficulty = DIFFICULTY;
-        let secret_salt = {
-            let secret = self.secret_salt.read().await;
-            *secret
-        };
-
-        let challange: u32 =
-            SecretSalt::calculate_challenge(&sender.id.pub_key(), &sender.addr.ip(), &secret_salt);
+        let challange = self
+            .auth
+            .challange(&sender.id.pub_key(), &sender.addr.ip())
+            .await;
 
         self.rpc_handler
             .reply(
@@ -755,22 +753,13 @@ impl Kademlia {
         nonce: u32,
         pow_sign: Vec<u8>,
     ) -> Result<(), KademliaError> {
-        let secret_salt = {
-            let secret = self.secret_salt.read().await;
-            *secret
-        };
-
-        let challange =
-            SecretSalt::calculate_challenge(sender.id.pub_key(), &sender.addr.ip(), &secret_salt);
+        let challange = self
+            .auth
+            .challange(sender.id.pub_key(), &sender.addr.ip())
+            .await;
 
         let secret = PoW::new(pow, challange, nonce, DIFFICULTY, pow_sign);
-
-        if !secret.verify(sender.id.pub_key()) {
-            return Err(AuthError::RoguePeer())?;
-        }
-
-        let mut token = Token::new(sender.id.pub_key(), secret.value);
-        token.sign(&self.certificate)?;
+        let token = self.auth.issue_token(sender, &secret).await?;
 
         self.rpc_handler
             .reply(&sender, request_id, DhtResponse::Welcome { token })

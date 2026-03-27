@@ -19,7 +19,7 @@ use crate::{
         auth::Token,
         message::{
             AuthDhtRequest, DhtMessageError, DhtPacket, DhtRequest, DhtResponse, RpcEnvelope,
-            RpcRequest, RpcResponse,
+            RpcResponse,
         },
     },
     network::{ConnectionManager, ConnectionManagerError, Message},
@@ -104,7 +104,7 @@ impl RpcHandler {
         Ok(())
     }
 
-    pub async fn request_handshake(
+    pub async fn handshake(
         &self,
         peer: &Node,
         payload: DhtRequest,
@@ -116,17 +116,13 @@ impl RpcHandler {
         .await
     }
 
-    pub async fn request_auth(
+    pub async fn request(
         &self,
         peer: &Node,
-        token: Option<Token>,
+        token: Token,
         payload: AuthDhtRequest,
         tout: Duration,
     ) -> Result<DhtResponse, RpcError> {
-        let Some(token) = token else {
-            return Err(RpcError::UnexpectedResponse);
-        };
-
         self.handle_request(peer, tout, |id| DhtPacket::Request {
             token,
             envelop: RpcEnvelope::new(id, payload),

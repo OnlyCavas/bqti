@@ -70,22 +70,6 @@ pub enum AuthDhtRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtRequest {
-    // Ping {
-    //     sender_id: Key,
-    // },
-    // FindNode {
-    //     sender_id: Key,
-    //     lookup_id: Key,
-    // },
-    // FindValue {
-    //     sender_id: Key,
-    //     key: Key,
-    // },
-    // Store {
-    //     sender_id: Key,
-    //     key: Key,
-    //     data: KademliaData,
-    // },
     RequestChallange {
         sender_id: Key,
     },
@@ -95,18 +79,6 @@ pub enum DhtRequest {
         nonce: u32,
         signature: Signature,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeerResponse {
-    pub id: Key,
-    pub addr: SocketAddr,
-}
-
-impl From<&PeerResponse> for Node {
-    fn from(value: &PeerResponse) -> Self {
-        Node::from_socket(value.id.clone(), value.addr)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,5 +128,17 @@ impl TryFrom<DhtPacket> for Message {
 
     fn try_from(value: DhtPacket) -> Result<Self, Self::Error> {
         Ok(Message::DHT(value.to_bytes()?))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerResponse {
+    pub id: Key,
+    pub addr: SocketAddr,
+}
+
+impl From<&PeerResponse> for Node {
+    fn from(value: &PeerResponse) -> Self {
+        Node::from_socket(value.id.clone(), value.addr)
     }
 }

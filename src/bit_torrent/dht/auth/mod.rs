@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod manager;
+
+pub use manager::AuthManager;
+
 use crate::{
     bit_torrent::certs::{KeyIdentity, Signature, Signer, Verifier},
     dht::Key,
@@ -55,7 +59,7 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn new(peer: &[u8], pow: Hash32Bytes) -> Self {
+    pub(crate) fn new(peer: &[u8], pow: Hash32Bytes) -> Self {
         let peer = peer.to_vec();
         let pre_allocated_capacity = peer.capacity();
 
