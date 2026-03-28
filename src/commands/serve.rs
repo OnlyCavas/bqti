@@ -11,8 +11,20 @@ use crate::{
 
 #[derive(Parser, Debug)]
 pub struct ServeArgs {
-    #[arg(short, long)]
+    #[arg(value_parser = parse_addr)]
     addr: String,
+}
+
+fn parse_addr(addr: &str) -> Result<String, String> {
+    if addr.starts_with(":") {
+        return Ok(format!("127.0.0.1{}", addr));
+    }
+
+    if addr.starts_with("localhost") {
+        return Ok(addr.replace("localhost", "127.0.0.1"));
+    }
+
+    Ok(addr.to_string())
 }
 
 pub async fn run(args: ServeArgs) -> Result<()> {
