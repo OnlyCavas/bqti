@@ -47,6 +47,9 @@ pub enum AuthError {
 
     #[error("public key from responder doesn't match the signature, handshake failed")]
     RoguePeer(),
+
+    #[error("rate limit exceeded")]
+    RateLimited(),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

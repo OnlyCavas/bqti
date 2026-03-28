@@ -545,6 +545,7 @@ impl Kademlia {
                     return Err(AuthError::InvalidToken())?;
                 }
 
+                self.auth.check_rate(&token.sender()).await?;
                 self.handle_request(token.sender(), envelop, src).await
             }
             DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src).await,
