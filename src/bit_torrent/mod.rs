@@ -4,7 +4,14 @@ use crate::bit_torrent::{
 };
 
 mod bencode;
+mod bqti;
+pub mod certs;
+pub mod dht;
 mod error;
+pub mod hasher;
+
+pub mod network;
+mod session;
 pub mod torrent;
 pub mod types;
 
@@ -25,4 +32,5 @@ pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
     Ok(())
 }
 
+pub use bqti::Bqti;
 pub use error::BitTorrentError;

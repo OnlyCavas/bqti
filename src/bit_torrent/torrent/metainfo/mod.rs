@@ -11,6 +11,7 @@ use crate::{
             v2::TorrentV2,
         },
     },
+    hasher::{Sha1Hash, Sha256Hash},
     types::{Hash2OBytes, Hash32Bytes, UnixDate},
 };
 
@@ -84,11 +85,7 @@ pub struct InfoHashV1(Hash2OBytes);
 
 impl InfoHashV1 {
     pub fn new(bytes: &[u8]) -> Self {
-        use sha1::{Digest, Sha1};
-        let mut hasher = Sha1::new();
-        hasher.update(&bytes);
-
-        Self(hasher.finalize().into())
+        Self(*Sha1Hash::digest(bytes).as_bytes())
     }
 }
 
@@ -97,11 +94,7 @@ pub struct InfoHashV2(Hash32Bytes);
 
 impl InfoHashV2 {
     pub fn new(bytes: &[u8]) -> Self {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-
-        Self(hasher.finalize().into())
+        Self(*Sha256Hash::digest(bytes).as_bytes())
     }
 }
 

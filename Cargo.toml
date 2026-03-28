@@ -19,3 +19,16 @@ enum_dispatch = "0.3.13"
 crossbeam = "0.8.4"
 tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
+quinn = "0.11.9"
+tokio = { version = "1.50.0", features = ["full"] }
+tokio-util = "0.7.18"
+async-trait = "0.1.89"
+rustls = { version = "0.23.37", features = ["aws-lc-rs", "ring"] }
+rustls-pki-types = "1.14.0"
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+futures = "0.3.32"
+directories = "6.0.0"
+anyhow = "1.0.102"
+rand = "0.10.0"
+ring = "0.17.14"
+indexmap = "2.13.0"

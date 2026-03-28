@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use clap::{Subcommand, ValueHint, arg};
+
+use anyhow::Result;
+
 use crate::{
     BQTIError, BitTorrentError,
     bit_torrent::torrent::{
@@ -9,6 +13,19 @@ use crate::{
     cli::{CreateArgs, TorrentVersion},
     load, save, utils,
 };
+
+#[derive(Subcommand)]
+pub enum Torrent {
+    Create(CreateArgs),
+    Inspect {
+        #[arg(value_hint = ValueHint::FilePath)]
+        torrent: PathBuf,
+    },
+    Validate {
+        #[arg(value_hint = ValueHint::FilePath)]
+        torrent: PathBuf,
+    },
+}
 
 fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
     if let Some(name) = &args.name {
@@ -22,7 +39,7 @@ fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
     Ok(file_name)
 }
 
-pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
+pub fn create(args: CreateArgs) -> Result<()> {
     let builder = match args.version {
         TorrentVersion::V1 => TorrentBuilder::with_v1(file_name(&args)?, args.piece_length as i64)
             .file(args.path)
@@ -70,11 +87,11 @@ pub fn create(args: CreateArgs) -> Result<(), BQTIError> {
     })?;
 
     save(path_str, &torrent)?;
-    println!("Torrent criado com sucesso em: {}", path_str);
+    info!("torrent created at: {}", path_str);
     Ok(())
 }
 
-pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<(), BQTIError> {
+pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<()> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
 
     match load(&torrent_path) {
@@ -83,15 +100,14 @@ pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<(), BQTIError> {
     }
 }
 
-pub fn validate(torrent: PathBuf) -> Result<(), BQTIError> {
+pub fn validate(torrent: PathBuf) -> Result<()> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
     let torrent = load(&torrent_path)?;
-
     match torrent.validate() {
         Ok(_) => {
-            println!(".torrent metadata file is valid!");
+            info!(".torrent metadata file is valid!");
             Ok(())
         }
-        Err(e) => Err(BQTIError::BitTorrent(BitTorrentError::Torrent(e))),
+        Err(e) => Err(e.into()),
     }
 }

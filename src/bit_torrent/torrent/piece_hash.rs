@@ -1,6 +1,7 @@
 use crossbeam::channel::{self, Sender};
-use sha1::{ Digest, Sha1};
+use sha1::{Digest, Sha1};
 use std::{fs::File, io::Read, path::PathBuf};
+use tokio::sync::mpsc;
 
 use crate::{
     bit_torrent::torrent::metainfo::{
@@ -45,6 +46,7 @@ impl PieceHasher for PieceHasherV1 {
     fn finalize(self) -> Result<Self::Output, TorrentError> {
         let mut results: Vec<(usize, [u8; 20])>;
         let mut files: Vec<EmbededFile>;
+        mpsc::channel::<HashEntry>(16);
         let (piece_tx, piece_rx) = channel::bounded::<HashEntry>(16); // read file data
         let (meta_tx, meta_rx) = channel::unbounded::<EmbededFile>(); // read file metadata
 
