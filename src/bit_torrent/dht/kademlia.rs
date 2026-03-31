@@ -532,8 +532,6 @@ impl Kademlia {
         Ok(None)
     }
 
-    // TODO implement PEX
-
     pub async fn handle_packet(
         &self,
         packet: DhtPacket,

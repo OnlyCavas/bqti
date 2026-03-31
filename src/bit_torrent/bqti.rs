@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
@@ -8,15 +8,20 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    bit_torrent::certs::KeyIdentity,
-    dht::{BootStrap, DhtPacket, Kademlia, Node, RpcHandler},
+    bit_torrent::{
+        certs::KeyIdentity,
+        pex::{PexHandler, PexMessage},
+    },
+    dht::{BootStrap, DhtPacket, Kademlia, KademliaData, Node, RpcHandler},
     network::{ConnectionManager, Message, Packet},
 };
 
 pub struct Bqti {
-    pub kademlia: Arc<Kademlia>,                // dht
-    connection_manager: Arc<ConnectionManager>, // single channel message flow
-    rpc_handler: Arc<RpcHandler>,               // rpc call abstraction ontop of connection manager
+    pub kademlia: Arc<Kademlia>,
+
+    pex: Arc<PexHandler>,
+    connection_manager: Arc<ConnectionManager>,
+    rpc_handler: Arc<RpcHandler>,
 }
 
 impl Bqti {
@@ -26,10 +31,12 @@ impl Bqti {
         certificate: KeyIdentity,
     ) -> Result<Self> {
         let rpc_handler = Arc::new(RpcHandler::new(connection_manager.clone()));
+        let pex_handler = PexHandler::new(connection_manager.clone());
         let kademlia = Kademlia::new(addr, rpc_handler.clone(), certificate)?;
 
         let bqti = Self {
             kademlia,
+            pex: pex_handler,
             connection_manager,
             rpc_handler,
         };
@@ -54,6 +61,7 @@ impl Bqti {
             tokio::select! {
                 Some(Packet(message, source_addr)) = stream_rx.recv() => {
                     let kademlia = self.kademlia.clone();
+                    let pex_handler = self.pex.clone();
                     let rpc_handler = self.rpc_handler.clone();
 
                     join_set.spawn(async move {
@@ -67,15 +75,28 @@ impl Bqti {
                                     };
 
                                     let _ = kademlia.handle_packet(request, source_addr).await;
-                                    // let _ = kademlia.handle_request(request, source_addr).await;
                                 },
                                 Err(e) => error!("dht parse error: {}", e),
                             }
                         },
-                        Message::PEX(payload) => info!("pex: {}", hex::encode(payload)),
-                        Message::Standard(payload) => info!("bit: {}", hex::encode(payload)),
-                    }
+                        Message::PEX(payload) => {
+                            match PexMessage::from_bytes(&payload) {
+                                Ok(pex) => {
+                                    let _ = pex_handler.handle_incoming(pex, &source_addr, move |info_hash, socket| {
+                                        let kademlia = kademlia.clone();
 
+                                        async move {
+                                            let _ = kademlia.store(info_hash, KademliaData::Peers(HashSet::from([socket]))).await;
+                                        }
+                                    }).await;
+                                },
+                                Err(e) => error!("pex parse error: {}", e),
+                            }
+                        },
+
+                        // TODO piece hashing and downloading
+                        Message::Standard(payload) => info!("bit: {}", hex::encode(payload)),
+                      }
                     });
                 },
                  Ok(Some(line)) = lines.next_line() => {

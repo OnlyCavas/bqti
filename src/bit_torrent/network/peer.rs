@@ -21,4 +21,12 @@ impl Peer {
             address: addr.parse()?,
         })
     }
+
+    pub fn from_socket(socket: SocketAddr) -> Self {
+        // FIXME: peer id, localhost, fix for the certificates
+        Self {
+            id: "locahost".into(),
+            address: socket,
+        }
+    }
 }

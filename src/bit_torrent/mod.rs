@@ -11,6 +11,7 @@ mod error;
 pub mod hasher;
 
 pub mod network;
+mod pex;
 mod session;
 pub mod torrent;
 pub mod types;

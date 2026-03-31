@@ -12,8 +12,6 @@ pub const PRUNE_CHECK_DURATION: Duration = Duration::from_secs(300);
 const MAX_STORE_ENTRIES: usize = 10_000;
 const DEFAULT_TTL: UnixDate = 24 * 3600;
 
-// TODO implement a rate limiter
-
 #[derive(Debug, Clone)]
 struct StoreValue {
     data: KademliaData,
