@@ -2,7 +2,9 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::{
-    commands::{certs::CertArgs, connect::ConnectArgs, serve::ServeArgs},
+    commands::{certs::CertArgs, serve::ServeArgs},
+    download::DownloadArgs,
+    seed::SeedArgs,
     torrent::Torrent,
 };
 
@@ -19,7 +21,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum SubCommand {
     Serve(ServeArgs),
-    Connect(ConnectArgs),
+    Download(DownloadArgs),
+    Seed(SeedArgs),
     Certs(CertArgs),
     Torrent {
         #[command(subcommand)]
@@ -35,7 +38,7 @@ pub enum TorrentVersion {
     Hybrid,
 }
 
-#[derive(Args)]
+#[derive(Args, Debug)]
 pub struct CreateArgs {
     pub path: PathBuf,
 
@@ -62,6 +65,12 @@ pub struct CreateArgs {
         num_args = 1..,
     )]
     pub seeds: Option<Vec<String>>,
+
+    #[arg(
+        long = "bootstrap",
+        num_args = 1..,
+    )]
+    pub nodes: Option<Vec<String>>,
 
     #[arg(short = 'l', long = "length", default_value_t = 524288)]
     pub piece_length: u64,

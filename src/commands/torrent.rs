@@ -41,23 +41,29 @@ fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
 
 pub fn create(args: CreateArgs) -> Result<()> {
     let builder = match args.version {
-        TorrentVersion::V1 => TorrentBuilder::with_v1(file_name(&args)?, args.piece_length as i64)
-            .file(args.path)
-            .files(args.files)
-            .announce_list(args.announce)
-            .web_seeds(args.seeds)
-            .comment(args.comment)
-            .private(args.private)
-            .created_by(args.created_by)
-            .build(),
-        TorrentVersion::V2 => TorrentBuilder::with_v2(file_name(&args)?, args.piece_length as i64)
-            .file(args.path)
-            .files(args.files)
-            .announce_list(args.announce)
-            .web_seeds(args.seeds)
-            .comment(args.comment)
-            .created_by(args.created_by)
-            .build(),
+        TorrentVersion::V1 => {
+            TorrentBuilder::with_v1(file_name(&args)?, &args.path, args.piece_length as i64)
+                .file(args.path)
+                .files(args.files)
+                .announce_list(args.announce)
+                .dht_nodes(args.nodes)
+                .web_seeds(args.seeds)
+                .comment(args.comment)
+                .private(args.private)
+                .created_by(args.created_by)
+                .build()
+        }
+        TorrentVersion::V2 => {
+            TorrentBuilder::with_v2(file_name(&args)?, &args.path, args.piece_length as i64)
+                .file(args.path)
+                .files(args.files)
+                .announce_list(args.announce)
+                .web_seeds(args.seeds)
+                .dht_nodes(args.nodes)
+                .comment(args.comment)
+                .created_by(args.created_by)
+                .build()
+        }
         TorrentVersion::Hybrid => Err(BQTIError::BitTorrent(BitTorrentError::Torrent(
             TorrentError::UnsupportedVersion(0),
         )))?,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr};
 
 use clap::error::Result;
 
@@ -8,11 +8,12 @@ use crate::{
         torrent::{
             merkle::MerkleTree,
             metainfo::{
-                InfoHash, Integrity, Metainfo, PieceLength, TorrentCommon, TorrentError,
-                v1::EmbededFile,
+                InfoHash, Integrity, Metainfo, PieceIntegrity, PieceLength, TorrentCommon,
+                TorrentError, v1::EmbededFile,
             },
         },
     },
+    hasher::Sha256Hash,
     types::{Hash32Bytes, MerkleRoot, PieceByte},
 };
 
@@ -49,6 +50,7 @@ impl From<&BencodeFileTreeNode> for FileTreeNode {
     }
 }
 
+#[derive(Clone)]
 pub struct TorrentV2 {
     pub(crate) info: TorrentCommon,
     pub(crate) version: Option<u8>,
@@ -83,7 +85,9 @@ impl TorrentV2 {
     ) -> Result<TorrentV2, TorrentError> {
         let mut flat_files = Vec::new();
         let mut total_size = 0;
+
         let web_seeds = metadata.web_seeds();
+        let dht_nodes = metadata.dht_nodes();
 
         let file_tree = metadata.info.file_tree.as_ref().map(|tree| {
             tree.iter()
@@ -108,7 +112,8 @@ impl TorrentV2 {
                 creation_date: metadata.creation_date,
                 comment: metadata.comment,
                 created_by: metadata.created_by,
-                web_seeds: web_seeds,
+                web_seeds,
+                dht_nodes,
             },
             metadata.info.version,
             metadata.piece_layers,
@@ -192,6 +197,32 @@ impl TorrentV2 {
     }
 }
 
+impl PieceIntegrity for TorrentV2 {
+    fn verify_hash(&self, index: u32, data: &[u8]) -> Result<(), TorrentError> {
+        let hashes = self.piece_hashes();
+
+        let expected = hashes
+            .get(index as usize)
+            .ok_or(TorrentError::NotValid(format!(
+                "no hash for piece {}",
+                index
+            )))?;
+
+        let actual = Sha256Hash::digest(data);
+
+        if actual.as_bytes() != expected.as_slice() {
+            return Err(TorrentError::NotValid(format!(
+                "piece {} hash mismatch: expected {:?}, got {:?}",
+                index,
+                expected,
+                actual.as_bytes()
+            )));
+        }
+
+        Ok(())
+    }
+}
+
 impl Integrity for TorrentV2 {
     fn validate(&self) -> Result<(), TorrentError> {
         let Some(file_tree) = self.file_tree.as_ref() else {
@@ -223,8 +254,8 @@ impl Metainfo for TorrentV2 {
         self.version.unwrap_or(2)
     }
 
-    fn info_hash(&self) -> &[u8] {
-        self.info.info_hash.as_ref()
+    fn info_hash(&self) -> &InfoHash {
+        &self.info.info_hash
     }
 
     fn piece_length(&self) -> PieceLength {
@@ -268,5 +299,9 @@ impl Metainfo for TorrentV2 {
 
     fn raw_pieces(&self) -> &[u8] {
         &[]
+    }
+
+    fn dht_nodes(&self) -> Option<&[SocketAddr]> {
+        self.info.dht_nodes.as_deref()
     }
 }

@@ -35,9 +35,11 @@ impl Message {
 
         let mut buf = Vec::new();
         let length = (1 + payload.len()) as u32;
+
         buf.extend_from_slice(&length.to_be_bytes());
         buf.push(id);
         buf.extend_from_slice(&payload);
+
         buf
     }
 

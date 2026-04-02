@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -62,6 +63,10 @@ impl RpcHandler {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    pub fn get_local_addr(&self) -> Result<SocketAddr, ConnectionManagerError> {
+        self.connection_manager.get_local_ip()
+    }
+
     pub async fn dispatch(&self, packet: DhtPacket) -> Option<DhtPacket> {
         match packet {
             DhtPacket::Response(response) => {
@@ -75,8 +80,13 @@ impl RpcHandler {
                     return None;
                 };
 
-                if response_tx.send(response.payload).is_err() {
-                    error!("failed to send rpc response: ");
+                if let Err(error) = response_tx.send(response.payload) {
+                    match error {
+                        DhtResponse::Value { .. } => {
+                            debug!("in-flight value response after early exit")
+                        }
+                        other => error!("failed to send rpc response: {:?}", other),
+                    }
                 }
 
                 None
@@ -167,7 +177,7 @@ impl RpcHandler {
 
         match timeout(tout, rx).await {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Err(RpcError::Timeout),
+            Ok(Err(_)) => Err(RpcError::ChannelClosed),
             Err(_) => {
                 {
                     let mut pending = self.pending.lock().await;

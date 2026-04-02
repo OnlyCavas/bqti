@@ -14,7 +14,10 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
     println!("└{}┘", divider);
     println!();
 
-    println!("  🔑 Info Hash    {}", hex::encode(torrent.info_hash()));
+    println!(
+        "  🔑 Info Hash    {}",
+        hex::encode(torrent.info_hash().as_ref())
+    );
     println!("  {}", thin);
 
     if let Some(announce) = torrent.announce() {

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use crate::{
     bit_torrent::{
@@ -9,6 +9,7 @@ use crate::{
                 v1::EmbededFile,
                 v2::{FileTreeNode, TorrentV2},
             },
+            path::TorrentPath,
             piece_hash::{PieceHasher, PieceHasherV1},
         },
     },
@@ -18,7 +19,7 @@ use crate::{
 
 pub struct V2Builder {
     name: String,
-    paths: Vec<PathBuf>,
+    files: TorrentPath,
     piece_length: PieceLength,
     announce: Option<String>,
     announce_list: Option<Vec<Vec<String>>>,
@@ -28,14 +29,15 @@ pub struct V2Builder {
     created_by: Option<String>,
     piece_layers: Option<Vec<EmbededFile>>,
     file_tree: Option<HashMap<String, FileTreeNode>>,
+    dht_nodes: Option<Vec<SocketAddr>>,
 }
 
 impl V2Builder {
-    pub fn new(name: impl Into<String>, piece_length: ByteSize) -> Self {
+    pub fn new(name: impl Into<String>, path: impl Into<PathBuf>, piece_length: ByteSize) -> Self {
         Self {
             name: name.into(),
             piece_length: PieceLength::from(piece_length),
-            paths: Vec::new(),
+            files: TorrentPath::new(path),
             piece_layers: None,
             file_tree: None,
             announce: None,
@@ -44,22 +46,13 @@ impl V2Builder {
             creation_date: None,
             comment: None,
             created_by: None,
+            dht_nodes: None,
         }
     }
 
-    pub fn file(mut self, path: impl Into<PathBuf>) -> Self {
-        let path = path.into();
-
-        if !path.is_dir() {
-            self.paths.push(path);
-            return self;
-        }
-
-        if let Ok(files) = fs::read_dir(&path) {
-            for entry in files.flatten() {
-                self = self.file(entry.path());
-            }
-        }
+    pub fn file(mut self, input: impl Into<PathBuf>) -> Self {
+        let input_path = input.into();
+        self.files = self.files.add(input_path);
 
         self
     }
@@ -108,6 +101,16 @@ impl V2Builder {
         self
     }
 
+    pub fn dht_nodes(mut self, nodes: impl Into<Option<Vec<String>>>) -> Self {
+        self.dht_nodes = nodes.into().map(|vec| {
+            vec.into_iter()
+                .filter_map(|s| s.parse::<SocketAddr>().ok())
+                .collect()
+        });
+
+        self
+    }
+
     pub fn comment(mut self, comment: impl Into<Option<String>>) -> Self {
         self.comment = comment.into();
         self
@@ -141,14 +144,18 @@ impl V2Builder {
     pub fn build(self) -> Result<TorrentFile, TorrentError> {
         self.piece_length.validate()?;
 
-        if self.paths.is_empty() {
+        if self.files.is_empty() {
             return Err(TorrentError::NotValid(
-                "no files added to the builder".into(),
+                "the provided path contains no files".into(),
             ));
         }
 
+        let files = self.files.clone();
         let mut hasher = PieceHasherV1::new(self.piece_length.0 as usize);
-        self.paths.iter().fold(&mut hasher, |h, p| h.file(p));
+
+        for (abs, rel) in &files.build() {
+            hasher.file(abs, rel);
+        }
 
         let (pieces, mode) = hasher.finalize()?;
         let info_hash = self.info_hash(&pieces, &BencodeMode::from(mode.clone()))?;
@@ -164,6 +171,7 @@ impl V2Builder {
                 self.comment,
                 self.created_by.or(Some(bqti::version())),
                 self.web_seeds,
+                self.dht_nodes,
             ),
             Some(2),        // version
             HashMap::new(), //piece_layers,

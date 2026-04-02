@@ -62,14 +62,14 @@ struct PexSession {
     last_sent: HashSet<SocketAddr>,
 }
 
-pub struct PexHandler {
+pub struct PexRouter {
     swarms: RwLock<HashMap<InfoHash, HashSet<SocketAddr>>>, // active peers within a torrent swarm
     sessions: RwLock<HashMap<SocketAddr, PexSession>>,      // calculate deltas
     connection_manager: Arc<ConnectionManager>,
 }
 
 // NOTE if .torrent has private flag, pex protocol must be disabled
-impl PexHandler {
+impl PexRouter {
     fn create(connection_manager: Arc<ConnectionManager>) -> Self {
         Self {
             swarms: RwLock::new(HashMap::new()),
@@ -79,7 +79,7 @@ impl PexHandler {
     }
 
     pub fn new(connection_manager: Arc<ConnectionManager>) -> Arc<Self> {
-        let pex_handler = Arc::new(PexHandler::create(connection_manager));
+        let pex_handler = Arc::new(PexRouter::create(connection_manager));
         let weak_prt = Arc::downgrade(&pex_handler);
 
         tokio::spawn(async move {

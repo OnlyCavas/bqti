@@ -42,7 +42,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
 
     let (manager, stream_rx) = ConnectionManager::new(endpoint_config, ManagerOptions::default())?;
 
-    let bit_torrent = Bqti::new(&args.addr, Arc::new(manager), leaf_kademlia)?;
+    let bit_torrent = Bqti::new(Arc::new(manager), leaf_kademlia)?;
     bit_torrent.serve_forever(stream_rx).await?;
 
     Ok(())

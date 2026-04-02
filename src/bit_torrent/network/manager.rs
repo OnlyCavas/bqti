@@ -26,6 +26,9 @@ pub enum ConnectionManagerError {
     #[error("failed to establish a connection, with {0}")]
     EstablishError(String),
 
+    #[error("can't establish a self connection")]
+    SelfConnectionError(),
+
     #[error("failed to fetch local ip address")]
     LocalIpError(),
 }
@@ -83,7 +86,7 @@ impl ConnectionManager {
         Ok((manager, stream_rx))
     }
 
-    pub fn get_local_ip(self) -> Result<SocketAddr, ConnectionManagerError> {
+    pub fn get_local_ip(&self) -> Result<SocketAddr, ConnectionManagerError> {
         self.endpoint
             .local_addr()
             .map_err(|_| ConnectionManagerError::LocalIpError())
@@ -118,6 +121,11 @@ impl ConnectionManager {
 
     pub async fn start_listening(&self, cancel: CancellationToken) {
         let mut join_handle = JoinSet::new();
+
+        match self.get_local_ip() {
+            Ok(addr) => info!("BitTorrent service started on {}", addr),
+            Err(_) => panic!("failed to retrive local address"),
+        }
 
         loop {
             tokio::select! {
@@ -184,9 +192,7 @@ impl ConnectionManager {
             .map_err(|_| ConnectionManagerError::LocalIpError())?;
 
         if self.is_self_connection(&peer.address, &local_addr) {
-            return Err(ConnectionManagerError::EstablishError(
-                local_addr.to_string(),
-            ))?;
+            return Err(ConnectionManagerError::SelfConnectionError())?;
         }
 
         {
@@ -220,6 +226,11 @@ impl ConnectionManager {
     ) -> Result<(), ConnectionManagerError> {
         let conns = self.connections.read().await;
         let peer_id = peer.address.to_string();
+        let local_addr = self.get_local_ip()?;
+
+        if self.is_self_connection(&peer.address, &local_addr) {
+            return Err(ConnectionManagerError::SelfConnectionError());
+        }
 
         let Some(conn) = conns.get(&peer_id) else {
             error!("failed to send message");

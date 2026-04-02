@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::{
     bit_torrent::{
         bencode::{self, BencodeTorrent},
@@ -19,12 +21,20 @@ pub use v2_builder::V2Builder;
 pub struct TorrentBuilder {}
 
 impl TorrentBuilder {
-    pub fn with_v2(name: impl Into<String>, piece_length: ByteSize) -> V2Builder {
-        V2Builder::new(name, piece_length)
+    pub fn with_v2(
+        name: impl Into<String>,
+        path: impl Into<PathBuf>,
+        piece_length: ByteSize,
+    ) -> V2Builder {
+        V2Builder::new(name, path, piece_length)
     }
 
-    pub fn with_v1(name: impl Into<String>, piece_length: ByteSize) -> V1Builder {
-        V1Builder::new(name, piece_length)
+    pub fn with_v1(
+        name: impl Into<String>,
+        path: impl Into<PathBuf>,
+        piece_length: ByteSize,
+    ) -> V1Builder {
+        V1Builder::new(name, path, piece_length)
     }
 
     pub fn apply_from_metadata(metadata: BencodeTorrent) -> Result<TorrentFile, TorrentError> {

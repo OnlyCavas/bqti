@@ -1,6 +1,8 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use async_trait::async_trait;
+use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::mpsc,
@@ -9,36 +11,69 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     bit_torrent::{
-        certs::KeyIdentity,
-        pex::{PexHandler, PexMessage},
+        certs::{KeyIdentity, PublicKey},
+        pex::{PexMessage, PexRouter},
+        torrent::metainfo::{Integrity, TorrentFile},
     },
-    dht::{BootStrap, DhtPacket, Kademlia, KademliaData, Node, RpcHandler},
+    dht::{BootStrap, DhtPacket, Kademlia, KademliaClient, Node, RpcHandler, TorrentDht},
+    load,
     network::{ConnectionManager, Message, Packet},
+    session::{BepRouter, SessionManager, SessionMode, StandardMessage, TorrentSessionError},
 };
 
-pub struct Bqti {
-    pub kademlia: Arc<Kademlia>,
+#[derive(Debug, Error)]
+pub enum BqtiTorretingError {
+    #[error(transparent)]
+    TorrentSessionError(#[from] TorrentSessionError),
+}
 
-    pex: Arc<PexHandler>,
+#[async_trait]
+pub trait Torreting {
+    async fn append(
+        &self,
+        mode: SessionMode,
+        torrent: TorrentFile,
+    ) -> Result<(), BqtiTorretingError>;
+}
+
+pub struct Bqti {
     connection_manager: Arc<ConnectionManager>,
+
+    pub kademlia: Arc<Kademlia>,
     rpc_handler: Arc<RpcHandler>,
+
+    pex: Arc<PexRouter>,
+
+    manager: Arc<SessionManager>,
 }
 
 impl Bqti {
     pub fn new(
-        addr: &str,
         connection_manager: Arc<ConnectionManager>,
         certificate: KeyIdentity,
     ) -> Result<Self> {
+        let kad_cert = certificate.leaf("dht certificate", true)?;
+        let bep_cert = certificate.leaf("bep certificate", true)?;
+
         let rpc_handler = Arc::new(RpcHandler::new(connection_manager.clone()));
-        let pex_handler = PexHandler::new(connection_manager.clone());
-        let kademlia = Kademlia::new(addr, rpc_handler.clone(), certificate)?;
+        let kademlia = Kademlia::new(rpc_handler.clone(), kad_cert)?;
+
+        let pex_router = PexRouter::new(connection_manager.clone());
+        let bep_router = BepRouter::new(
+            bep_cert.pub_key(),
+            connection_manager.clone(),
+            kademlia.clone(),
+            pex_router.clone(),
+        )?;
+
+        let manager = Arc::new(SessionManager::new(bep_router));
 
         let bqti = Self {
             kademlia,
-            pex: pex_handler,
+            pex: pex_router,
             connection_manager,
             rpc_handler,
+            manager,
         };
 
         Ok(bqti)
@@ -53,6 +88,7 @@ impl Bqti {
 
         let manager = self.connection_manager.clone();
         let cancel_tx = cancellation_token.clone();
+
         let listener = tokio::spawn(async move {
             manager.start_listening(cancel_tx).await;
         });
@@ -63,6 +99,7 @@ impl Bqti {
                     let kademlia = self.kademlia.clone();
                     let pex_handler = self.pex.clone();
                     let rpc_handler = self.rpc_handler.clone();
+                    let torrent_manager = self.manager.clone();
 
                     join_set.spawn(async move {
                       match message {
@@ -86,16 +123,21 @@ impl Bqti {
                                         let kademlia = kademlia.clone();
 
                                         async move {
-                                            let _ = kademlia.store(info_hash, KademliaData::Peers(HashSet::from([socket]))).await;
+                                            let _ = kademlia.announce_peer(info_hash, socket).await;
                                         }
                                     }).await;
                                 },
                                 Err(e) => error!("pex parse error: {}", e),
                             }
                         },
-
-                        // TODO piece hashing and downloading
-                        Message::Standard(payload) => info!("bit: {}", hex::encode(payload)),
+                        Message::Standard(payload) => {
+                            match StandardMessage::from_bytes(&payload) {
+                                Ok(msg) => {
+                                    torrent_manager.dispatch(msg, source_addr).await;
+                                }
+                                Err(e) => error!("standard message parse error: {}", e),
+                            }
+                        }
                       }
                     });
                 },
@@ -143,6 +185,28 @@ impl Bqti {
                                 info!("{:?}", route_table);
                             });
                         },
+                        "d" => {
+                            let Ok(torrent_file) = load("resources/yes.torrent") else {
+                                panic!("failed to load file");
+                            };
+
+                            let Ok(_) = torrent_file.validate() else {
+                                panic!("it's invalid");
+                            };
+
+                            self.append(SessionMode::Download { target_dir: PathBuf::from(".") }, torrent_file.clone()).await?;
+                        },
+                        "s" => {
+                            let Ok(torrent_file) = load("resources/yes.torrent") else {
+                                panic!("failed to load file");
+                            };
+
+                            let Ok(_) = torrent_file.validate() else {
+                                panic!("it's invalid");
+                            };
+
+                            self.append(SessionMode::Seed { source_dir: PathBuf::from("resources") }, torrent_file.clone()).await?;
+                       },
                         "q" => break,
                         _ => {}
                     }
@@ -157,6 +221,19 @@ impl Bqti {
         self.connection_manager.shutdown().await;
         join_set.shutdown().await;
         listener.abort();
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Torreting for Bqti {
+    async fn append(
+        &self,
+        mode: SessionMode,
+        torrent: TorrentFile,
+    ) -> Result<(), BqtiTorretingError> {
+        self.manager.add(mode, &torrent).await;
 
         Ok(())
     }

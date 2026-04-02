@@ -4,7 +4,7 @@ use anyhow::Result;
 use bqti::{
     certs,
     cli::{Cli, SubCommand},
-    connect, serve,
+    download, seed, serve,
     torrent::{Torrent, create, inspect, validate},
 };
 
@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"));
 
     tracing_subscriber::fmt()
         .compact()
@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
         match subcommand {
             SubCommand::Serve(args) => serve::run(args).await?,
             SubCommand::Certs(args) => certs::run(args).await?,
-            SubCommand::Connect(args) => connect::run(args).await?,
+            SubCommand::Download(args) => download::run(args).await?,
+            SubCommand::Seed(args) => seed::run(args).await?,
             SubCommand::Torrent { torrent } => match torrent {
                 Torrent::Inspect { torrent } => inspect(torrent, cli.verbose)?,
                 Torrent::Validate { torrent } => validate(torrent)?,
