@@ -14,16 +14,21 @@ use crate::{
 pub trait PieceHasher {
     type Output;
 
-    fn file(&mut self, path: impl Into<PathBuf>) -> &mut Self;
+    fn file(&mut self, absolute: impl Into<PathBuf>, relative: impl Into<PathBuf>) -> &mut Self;
 
     fn finalize(self) -> Result<Self::Output, TorrentError>;
 }
 
 type HashEntry = (usize, Vec<u8>);
 
+struct FileEntry {
+    absolute: PathBuf,
+    relative: PathBuf,
+}
+
 pub struct PieceHasherV1 {
     piece_length: usize,
-    files: Vec<PathBuf>,
+    files: Vec<FileEntry>,
 }
 
 impl PieceHasherV1 {
@@ -38,8 +43,12 @@ impl PieceHasherV1 {
 impl PieceHasher for PieceHasherV1 {
     type Output = (PieceByte, V1Mode);
 
-    fn file(&mut self, path: impl Into<PathBuf>) -> &mut Self {
-        self.files.push(path.into());
+    fn file(&mut self, absolute: impl Into<PathBuf>, relative: impl Into<PathBuf>) -> &mut Self {
+        self.files.push(FileEntry {
+            absolute: absolute.into(),
+            relative: relative.into(),
+        });
+
         self
     }
 
@@ -85,7 +94,7 @@ impl PieceHasher for PieceHasherV1 {
 }
 
 fn file_handle(
-    files: &[PathBuf],
+    files: &[FileEntry],
     piece_length: &usize,
     meta_tx: &Sender<EmbededFile>,
     tx: &Sender<HashEntry>,
@@ -116,7 +125,6 @@ fn file_handle(
         }
     }
 
-    // flush remaining pieces
     if bytes_buffered > 0 {
         buffer.truncate(bytes_buffered);
         tx.send((piece_index, buffer)).ok();
@@ -127,9 +135,9 @@ fn file_handle(
 
 fn dispatch_file_metadata(
     meta_tx: &Sender<EmbededFile>,
-    path: &PathBuf,
+    entry: &FileEntry,
 ) -> Result<File, TorrentError> {
-    let Ok(file) = File::open(&path) else {
+    let Ok(file) = File::open(&entry.absolute) else {
         return Err(TorrentError::Failed("failed to open file".into()));
     };
 
@@ -137,14 +145,18 @@ fn dispatch_file_metadata(
         return Err(TorrentError::Failed("failed get file metadata".into()));
     };
 
-    let Some(file_path) = path.to_str() else {
-        return Err(TorrentError::Failed("failed to parse file path".into()));
-    };
+    let file_path: Vec<String> = entry
+        .relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+
+    debug!("add {}", entry.relative.to_string_lossy());
 
     meta_tx
         .send(EmbededFile {
             length: metadata.len() as i64,
-            path: vec![file_path.to_string()],
+            path: file_path,
             md5sum: None,
         })
         .ok();

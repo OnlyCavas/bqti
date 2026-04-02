@@ -21,6 +21,10 @@ impl BootStrap {
         Ok(Self(Node::from_socket(Key::new(&[0u8; 32]), addr.parse()?)))
     }
 
+    pub fn from_socket(socket: SocketAddr) -> Self {
+        Self(Node::from_socket(Key::new(&[0u8; 32]), socket))
+    }
+
     pub fn node(&self) -> &Node {
         &self.0
     }

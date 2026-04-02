@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value;
@@ -48,6 +51,9 @@ pub struct BencodeTorrent {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub piece_layers: HashMap<MerkleRoot, PieceByte>, // only on v2, n * 32
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<Vec<(String, u16)>>,
 }
 
 impl BencodeTorrent {
@@ -61,6 +67,7 @@ impl BencodeTorrent {
         url_list: Option<Vec<String>>,
         extra: HashMap<String, serde_bencode::value::Value>,
         piece_layers: HashMap<MerkleRoot, PieceByte>,
+        nodes: Option<Vec<(String, u16)>>,
     ) -> Self {
         Self {
             announce,
@@ -72,11 +79,24 @@ impl BencodeTorrent {
             url_list,
             extra,
             piece_layers,
+            nodes,
         }
     }
 
     fn extra_value(&self, id: &str) -> Option<&serde_bencode::value::Value> {
         self.extra.get(id)
+    }
+
+    pub fn dht_nodes(&self) -> Option<Vec<SocketAddr>> {
+        self.nodes.as_ref().map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|(ip_str, port)| {
+                    let ip: IpAddr = ip_str.parse().ok()?;
+                    Some(SocketAddr::from((ip, *port)))
+                })
+                .collect()
+        })
     }
 
     pub fn web_seeds(&self) -> Option<Vec<String>> {

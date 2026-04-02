@@ -1,10 +1,13 @@
+use std::{net::SocketAddr, path::PathBuf};
+
 use crate::{
     bit_torrent::{
         bencode::{BencodeMode, BencodeTorrent, FileInfo},
         torrent::metainfo::{
-            InfoHash, Integrity, Metainfo, PieceLength, TorrentCommon, TorrentError,
+            InfoHash, Integrity, Metainfo, PieceIntegrity, PieceLength, TorrentCommon, TorrentError,
         },
     },
+    hasher::Sha1Hash,
     types::{ByteSize, PieceByte},
 };
 
@@ -52,6 +55,12 @@ pub struct EmbededFile {
     pub md5sum: Option<String>,
 }
 
+impl EmbededFile {
+    pub fn to_path(&self) -> PathBuf {
+        self.path.iter().collect()
+    }
+}
+
 impl From<FileInfo> for EmbededFile {
     fn from(value: FileInfo) -> Self {
         EmbededFile {
@@ -72,6 +81,7 @@ impl From<EmbededFile> for FileInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct TorrentV1 {
     pub(crate) info: TorrentCommon,
     pub(crate) private: bool,
@@ -94,6 +104,7 @@ impl TorrentV1 {
         info_hash: InfoHash,
     ) -> Result<TorrentV1, TorrentError> {
         let web_seeds = metadata.web_seeds();
+        let dht_nodes = metadata.dht_nodes();
         let file_path = metadata.info.name.clone();
         let private = metadata.info.private.unwrap_or(0) == 1;
 
@@ -115,12 +126,39 @@ impl TorrentV1 {
                 creation_date: metadata.creation_date,
                 comment: metadata.comment,
                 created_by: metadata.created_by,
-                web_seeds: web_seeds,
+                web_seeds,
+                dht_nodes,
             },
             private,
             metadata.info.pieces,
             mode,
         ))
+    }
+}
+
+impl PieceIntegrity for TorrentV1 {
+    fn verify_hash(&self, index: u32, data: &[u8]) -> Result<(), TorrentError> {
+        let hashes = self.piece_hashes();
+
+        let expected = hashes
+            .get(index as usize)
+            .ok_or(TorrentError::NotValid(format!(
+                "no hash for piece {}",
+                index
+            )))?;
+
+        let actual = Sha1Hash::digest(data);
+
+        if actual.as_bytes() != expected.as_slice() {
+            return Err(TorrentError::NotValid(format!(
+                "piece {} hash mismatch: expected {:?}, got {:?}",
+                index,
+                expected,
+                actual.as_bytes()
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -169,8 +207,8 @@ impl Metainfo for TorrentV1 {
         1
     }
 
-    fn info_hash(&self) -> &[u8] {
-        self.info.info_hash.as_ref()
+    fn info_hash(&self) -> &InfoHash {
+        &self.info.info_hash
     }
 
     fn piece_length(&self) -> PieceLength {
@@ -220,5 +258,9 @@ impl Metainfo for TorrentV1 {
 
     fn raw_pieces(&self) -> &[u8] {
         &self.pieces
+    }
+
+    fn dht_nodes(&self) -> Option<&[SocketAddr]> {
+        self.info.dht_nodes.as_deref()
     }
 }

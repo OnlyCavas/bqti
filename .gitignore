@@ -1,6 +1,12 @@
 # Rust
 /target
 
+# --- User-Facing Results (Symlinks & .part files) ---
+# Ignore the symlinks and temporary files created in your dev folder
+
+# This ignores the 'download' symlink pointing to your internal store
+download
+
 # MacOs
 .DS_Store
 

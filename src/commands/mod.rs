@@ -1,4 +1,5 @@
 pub mod certs;
-pub mod connect;
+pub mod download;
+pub mod seed;
 pub mod serve;
 pub mod torrent;

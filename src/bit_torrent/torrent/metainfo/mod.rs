@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, net::SocketAddr};
 
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
@@ -36,7 +36,8 @@ pub enum TorrentError {
     Unsupported(String),
 }
 
-#[enum_dispatch(Metainfo, Integrity)]
+#[enum_dispatch(Metainfo, Integrity, PieceIntegrity)]
+#[derive(Clone)]
 pub enum TorrentFile {
     V1(TorrentV1),
     V2(TorrentV2),
@@ -46,9 +47,10 @@ pub enum TorrentFile {
 pub trait Metainfo {
     fn announce(&self) -> Option<&str>;
     fn announce_list(&self) -> Option<&[Vec<String>]>;
+    fn dht_nodes(&self) -> Option<&[SocketAddr]>;
     fn name(&self) -> &str;
     fn version(&self) -> u8;
-    fn info_hash(&self) -> &[u8];
+    fn info_hash(&self) -> &InfoHash;
     fn piece_length(&self) -> PieceLength;
     fn total_size(&self) -> u64;
     fn is_private(&self) -> bool;
@@ -74,13 +76,24 @@ pub trait Integrity {
     fn validate(&self) -> Result<(), TorrentError>;
 }
 
-#[derive(Debug, Clone)]
+#[enum_dispatch]
+pub trait PieceIntegrity {
+    fn verify_hash(&self, index: u32, data: &[u8]) -> Result<(), TorrentError>;
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum InfoHash {
     V1(InfoHashV1),
     V2(InfoHashV2),
 }
 
-#[derive(Debug, Clone)]
+impl InfoHash {
+    pub fn to_string(&self) -> String {
+        hex::encode(self.as_ref())
+    }
+}
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct InfoHashV1(Hash2OBytes);
 
 impl InfoHashV1 {
@@ -89,7 +102,7 @@ impl InfoHashV1 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct InfoHashV2(Hash32Bytes);
 
 impl InfoHashV2 {
@@ -107,6 +120,37 @@ impl AsRef<[u8]> for InfoHash {
     }
 }
 
+impl From<&InfoHash> for Vec<u8> {
+    fn from(value: &InfoHash) -> Self {
+        value.as_ref().to_vec()
+    }
+}
+
+impl TryFrom<Vec<u8>> for InfoHash {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        match value.len() {
+            20 => {
+                let mut hash = [0u8; 20];
+                hash.copy_from_slice(&value);
+
+                Ok(InfoHash::V1(InfoHashV1(hash)))
+            }
+            32 => {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&value);
+
+                Ok(InfoHash::V2(InfoHashV2(hash)))
+            }
+            _ => Err(format!(
+                "Invalid InfoHash length: {} bytes (expected 20 or 32)",
+                value.len()
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TorrentCommon {
     pub info_hash: InfoHash,
@@ -118,6 +162,7 @@ pub struct TorrentCommon {
     pub comment: Option<String>,
     pub created_by: Option<String>,
     pub web_seeds: Option<Vec<String>>,
+    pub dht_nodes: Option<Vec<SocketAddr>>,
 }
 
 impl TorrentCommon {
@@ -131,6 +176,7 @@ impl TorrentCommon {
         comment: Option<String>,
         created_by: Option<String>,
         web_seeds: Option<Vec<String>>,
+        dht_nodes: Option<Vec<SocketAddr>>,
     ) -> Self {
         Self {
             info_hash,
@@ -142,6 +188,7 @@ impl TorrentCommon {
             comment,
             created_by,
             web_seeds,
+            dht_nodes,
         }
     }
 }
@@ -177,6 +224,13 @@ impl From<&TorrentFile> for BencodeInfo {
 
 impl From<&TorrentFile> for BencodeTorrent {
     fn from(value: &TorrentFile) -> Self {
+        let dht_nodes: Option<Vec<(String, u16)>> = value.dht_nodes().map(|nodes_slice| {
+            nodes_slice
+                .iter()
+                .map(|addr| (addr.ip().to_string(), addr.port()))
+                .collect()
+        });
+
         BencodeTorrent::new(
             value.announce().map(|s| s.to_string()),
             value.into(),
@@ -187,6 +241,7 @@ impl From<&TorrentFile> for BencodeTorrent {
             value.web_seeds().map(|l| l.to_vec()),
             HashMap::new(), // FIX missing the v2 impl
             HashMap::new(), // FIX missing the v2 impl
+            dht_nodes,
         )
     }
 }
@@ -195,6 +250,10 @@ impl From<&TorrentFile> for BencodeTorrent {
 pub struct PieceLength(pub u64);
 
 impl PieceLength {
+    pub fn value(&self) -> u64 {
+        self.0
+    }
+
     pub fn validate(self) -> Result<(), TorrentError> {
         let pl = self.0;
         const MIN_LIMIT: u64 = 16 * 1024; // 16 kb
