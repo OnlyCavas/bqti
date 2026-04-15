@@ -2,12 +2,14 @@
 extern crate tracing;
 
 mod bit_torrent;
-mod commands;
 mod error;
 
 pub mod cli;
+pub mod daemon;
+pub mod standalone;
 pub mod utils;
 
+pub mod ipc;
+
 pub use bit_torrent::*;
-pub use commands::{certs, download, seed, serve, torrent};
 pub use error::BQTIError;

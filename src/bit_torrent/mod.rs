@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::bit_torrent::{
     bencode::{BencodeTorrent, decode, encode},
     torrent::{builder::TorrentBuilder, metainfo::TorrentFile},
@@ -17,7 +19,7 @@ pub mod session;
 pub mod torrent;
 pub mod types;
 
-pub fn load(path: &str) -> Result<TorrentFile, BitTorrentError> {
+pub fn load(path: impl AsRef<Path>) -> Result<TorrentFile, BitTorrentError> {
     let bytes = std::fs::read(path).map_err(BitTorrentError::Io)?;
     let info = decode::<BencodeTorrent>(&bytes).map_err(BitTorrentError::Codec)?;
     let torrent = TorrentBuilder::apply_from_metadata(info).map_err(BitTorrentError::Torrent)?;
@@ -34,5 +36,5 @@ pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
     Ok(())
 }
 
-pub use bqti::{Bqti, Torreting};
+pub use bqti::{Bqti, Torrenting};
 pub use error::BitTorrentError;

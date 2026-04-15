@@ -1,12 +1,5 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use std::path::PathBuf;
-
-use crate::{
-    commands::{certs::CertArgs, serve::ServeArgs},
-    download::DownloadArgs,
-    seed::SeedArgs,
-    torrent::Torrent,
-};
 
 #[derive(Parser)]
 #[command(version, about = "BQTI - BitTorrent+QUIC+TEE+I2P")]
@@ -20,14 +13,64 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum SubCommand {
-    Serve(ServeArgs),
-    Download(DownloadArgs),
-    Seed(SeedArgs),
-    Certs(CertArgs),
+    // Serve(ServeArgs),
+    // Download(DownloadArgs),
+    // Seed(SeedArgs),
+    // Ipc(CreateArgs),
+    Serve {
+        #[arg(value_parser = parse_addr)]
+        addr: String,
+    },
+
+    #[command(flatten)]
+    Daemon(Daemon),
+
+    Certs {
+        #[arg(value_enum)]
+        kind: CertType,
+
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     Torrent {
         #[command(subcommand)]
         torrent: Torrent,
     },
+}
+
+#[derive(Subcommand)]
+pub enum Daemon {
+    Download {
+        #[arg(value_name = "TORRENT")]
+        torrent: String,
+
+        #[arg(value_name = "OUTPUT")]
+        output: String,
+    },
+    Seed {
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
+    Status,
+}
+
+fn parse_addr(addr: &str) -> Result<String, String> {
+    if addr.starts_with(":") {
+        return Ok(format!("127.0.0.1{}", addr));
+    }
+
+    if addr.starts_with("localhost") {
+        return Ok(addr.replace("localhost", "127.0.0.1"));
+    }
+
+    Ok(addr.to_string())
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum CertType {
+    Root,
+    Leaf,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
@@ -38,54 +81,52 @@ pub enum TorrentVersion {
     Hybrid,
 }
 
-#[derive(Args, Debug)]
-pub struct CreateArgs {
-    pub path: PathBuf,
+#[derive(Subcommand)]
+pub enum Torrent {
+    Create {
+        path: PathBuf,
 
-    #[arg(short, long)]
-    pub name: Option<String>,
+        #[arg(short, long)]
+        name: Option<String>,
 
-    #[arg(short, long, num_args = 1..)]
-    pub files: Vec<PathBuf>,
+        #[arg(short, long, num_args = 1..)]
+        files: Vec<PathBuf>,
 
-    #[arg(long, value_enum, default_value_t = TorrentVersion::V1)]
-    pub version: TorrentVersion,
+        #[arg(long, value_enum, default_value_t = TorrentVersion::V1)]
+        version: TorrentVersion,
 
-    #[arg(
-        short = 't',
-        long = "tracker",
-        num_args = 1..,
-        value_parser = parse_tier
-    )]
-    pub announce: Vec<Vec<String>>,
+        #[arg(short = 't', long = "tracker", num_args = 1.., value_parser = parse_tier)]
+        announce: Vec<Vec<String>>,
 
-    #[arg(
-        short = 's',
-        long = "seeds",
-        num_args = 1..,
-    )]
-    pub seeds: Option<Vec<String>>,
+        #[arg(short = 's', long = "seeds", num_args = 1..)]
+        seeds: Option<Vec<String>>,
 
-    #[arg(
-        long = "bootstrap",
-        num_args = 1..,
-    )]
-    pub nodes: Option<Vec<String>>,
+        #[arg(long = "bootstrap", num_args = 1..)]
+        nodes: Option<Vec<String>>,
 
-    #[arg(short = 'l', long = "length", default_value_t = 524288)]
-    pub piece_length: u64,
+        #[arg(short = 'l', long = "length", default_value_t = 524288)]
+        piece_length: u64,
 
-    #[arg(short, long)]
-    pub private: bool,
+        #[arg(short, long)]
+        private: bool,
 
-    #[arg(short, long)]
-    pub comment: Option<String>,
+        #[arg(short, long)]
+        comment: Option<String>,
 
-    #[arg(short = 'b', long = "by")]
-    pub created_by: Option<String>,
+        #[arg(short = 'b', long = "by")]
+        created_by: Option<String>,
 
-    #[arg(short, long)]
-    pub output: Option<String>,
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    Inspect {
+        #[arg(value_hint = ValueHint::FilePath)]
+        torrent: PathBuf,
+    },
+    Validate {
+        #[arg(value_hint = ValueHint::FilePath)]
+        torrent: PathBuf,
+    },
 }
 
 fn parse_tier(s: &str) -> Result<Vec<String>, String> {

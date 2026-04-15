@@ -2,13 +2,11 @@ use std::io;
 
 use anyhow::Result;
 use bqti::{
-    certs,
     cli::{Cli, SubCommand},
-    download, seed, serve,
-    torrent::{Torrent, create, inspect, validate},
+    daemon, ipc, standalone,
 };
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -23,19 +21,17 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(subcommand) = cli.subcommand {
-        match subcommand {
-            SubCommand::Serve(args) => serve::run(args).await?,
-            SubCommand::Certs(args) => certs::run(args).await?,
-            SubCommand::Download(args) => download::run(args).await?,
-            SubCommand::Seed(args) => seed::run(args).await?,
-            SubCommand::Torrent { torrent } => match torrent {
-                Torrent::Inspect { torrent } => inspect(torrent, cli.verbose)?,
-                Torrent::Validate { torrent } => validate(torrent)?,
-                Torrent::Create(args) => create(args)?,
-            },
-        }
-    }
+    let Some(subcommand) = cli.subcommand else {
+        Cli::command().print_help()?;
+        return Ok(());
+    };
+
+    match subcommand {
+        SubCommand::Daemon(daemon) => ipc::handle_client(daemon).await,
+        SubCommand::Certs { kind, output } => standalone::handle_certs(kind, output).await,
+        SubCommand::Torrent { torrent } => standalone::handle_torrent(torrent, cli.verbose),
+        SubCommand::Serve { addr } => daemon::handle_serve(addr).await,
+    }?;
 
     Ok(())
 }

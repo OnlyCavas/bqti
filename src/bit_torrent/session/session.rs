@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::Arc,
 };
 
@@ -31,6 +32,15 @@ use crate::{
 pub enum SessionMode {
     Download { target_dir: PathBuf },
     Seed { source_dir: PathBuf },
+}
+
+impl SessionMode {
+    pub fn dir(&self) -> &PathBuf {
+        match self {
+            SessionMode::Download { target_dir } => target_dir,
+            SessionMode::Seed { source_dir } => source_dir,
+        }
+    }
 }
 
 pub struct TorrentSession {

@@ -1,21 +1,19 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{convert::Infallible, path::PathBuf, str::FromStr, sync::Arc};
 
 use anyhow::Result;
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    sync::mpsc,
-};
+use tokio::sync::mpsc::{self, Receiver};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     bit_torrent::{
         certs::{KeyIdentity, PublicKey},
         pex::{PexMessage, PexRouter},
-        torrent::metainfo::{Integrity, TorrentFile},
+        torrent::metainfo::{Integrity, Metainfo, TorrentError},
     },
-    dht::{BootStrap, DhtPacket, Kademlia, KademliaClient, Node, RpcHandler, TorrentDht},
+    dht::{DhtPacket, Kademlia, RpcHandler, TorrentDht},
+    ipc::server::IpcCommand,
     load,
     network::{ConnectionManager, Message, Packet},
     session::{BepRouter, SessionManager, SessionMode, StandardMessage, TorrentSessionError},
@@ -25,26 +23,50 @@ use crate::{
 pub enum BqtiTorretingError {
     #[error(transparent)]
     TorrentSessionError(#[from] TorrentSessionError),
+
+    #[error(transparent)]
+    TorrentError(#[from] TorrentError),
+
+    #[error("failed to load .torrent file")]
+    FailedToLoad(),
+
+    #[error("unsupported feature: {0}")]
+    Unsupported(String),
+}
+
+pub enum TorrentSource {
+    Magnet(String),
+    File(PathBuf),
+}
+
+impl FromStr for TorrentSource {
+    type Err = Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.starts_with("magnet:") {
+            Ok(Self::Magnet(s.to_string()))
+        } else {
+            Ok(Self::File(PathBuf::from(s)))
+        }
+    }
 }
 
 #[async_trait]
-pub trait Torreting {
-    async fn append(
+pub trait Torrenting {
+    // TODO remove torrents
+    // TODO get torrent status, an stream of events of the download or seeding state
+    async fn add_torrent(
         &self,
         mode: SessionMode,
-        torrent: TorrentFile,
-    ) -> Result<(), BqtiTorretingError>;
+        source: TorrentSource,
+    ) -> Result<String, BqtiTorretingError>;
 }
 
 pub struct Bqti {
     connection_manager: Arc<ConnectionManager>,
-
-    pub kademlia: Arc<Kademlia>,
+    kademlia: Arc<Kademlia>,
     rpc_handler: Arc<RpcHandler>,
-
     pex: Arc<PexRouter>,
-
-    manager: Arc<SessionManager>,
+    torrenting_session: Arc<SessionManager>,
 }
 
 impl Bqti {
@@ -73,18 +95,19 @@ impl Bqti {
             pex: pex_router,
             connection_manager,
             rpc_handler,
-            manager,
+            torrenting_session: manager,
         };
 
         Ok(bqti)
     }
 
-    pub async fn serve_forever(&self, mut stream_rx: mpsc::Receiver<Packet>) -> Result<()> {
+    pub async fn serve_forever(
+        &mut self,
+        mut stream_rx: mpsc::Receiver<Packet>,
+        mut ipc_rx: Receiver<IpcCommand>,
+    ) -> Result<()> {
         let mut join_set = tokio::task::JoinSet::new();
         let cancellation_token = CancellationToken::new();
-
-        let stdin = BufReader::new(tokio::io::stdin());
-        let mut lines = stdin.lines();
 
         let manager = self.connection_manager.clone();
         let cancel_tx = cancellation_token.clone();
@@ -99,7 +122,7 @@ impl Bqti {
                     let kademlia = self.kademlia.clone();
                     let pex_handler = self.pex.clone();
                     let rpc_handler = self.rpc_handler.clone();
-                    let torrent_manager = self.manager.clone();
+                    let torrent_manager = self.torrenting_session.clone();
 
                     join_set.spawn(async move {
                       match message {
@@ -141,76 +164,11 @@ impl Bqti {
                       }
                     });
                 },
-                 Ok(Some(line)) = lines.next_line() => {
-                    let kademlia = self.kademlia.clone();
 
-                    match line.trim() {
-                        "o" => {
-                            info!("pressed o");
-
-                            join_set.spawn(async move {
-                                let node = match Node::random("127.0.0.1:9001") {
-                                    Ok(n) => n,
-                                    Err(e) => { error!("invalid node addr: {}", e); return; }
-                                };
-
-                                match kademlia.ping(&node).await {
-                                    Ok(r) => info!("ping response: {:?}", r),
-                                    Err(e) => error!("ping failed: {}", e),
-                                }
-                            });
-                        },
-                        "j" => {
-                            info!("pressed j");
-
-                            join_set.spawn(async move {
-                                let node = match BootStrap::new("127.0.0.1:9002") {
-                                    Ok(n) => n,
-                                    Err(e) => { error!("invalid node addr: {}", e); return; }
-                                };
-
-                                match kademlia
-                                    .join_network(&node)
-                                    .await {
-                                        Ok(_) => info!("connected to the network"),
-                                        Err(_) => warn!("failed to boostrap"),
-                                    }
-                            });
-                        },
-                        "c" => {
-                            info!("pressed c");
-
-                            join_set.spawn(async move {
-                                let route_table = kademlia.route_table.read().await;
-                                info!("{:?}", route_table);
-                            });
-                        },
-                        "d" => {
-                            let Ok(torrent_file) = load("resources/yes.torrent") else {
-                                panic!("failed to load file");
-                            };
-
-                            let Ok(_) = torrent_file.validate() else {
-                                panic!("it's invalid");
-                            };
-
-                            self.append(SessionMode::Download { target_dir: PathBuf::from(".") }, torrent_file.clone()).await?;
-                        },
-                        "s" => {
-                            let Ok(torrent_file) = load("resources/yes.torrent") else {
-                                panic!("failed to load file");
-                            };
-
-                            let Ok(_) = torrent_file.validate() else {
-                                panic!("it's invalid");
-                            };
-
-                            self.append(SessionMode::Seed { source_dir: PathBuf::from("resources") }, torrent_file.clone()).await?;
-                       },
-                        "q" => break,
-                        _ => {}
-                    }
+                Some(cmd) = ipc_rx.recv() => {
+                    self.handle_ipc(cmd).await;
                 }
+
                 _ = tokio::signal::ctrl_c() => {
                     break;
                 }
@@ -224,17 +182,44 @@ impl Bqti {
 
         Ok(())
     }
+
+    async fn handle_ipc(&self, cmd: IpcCommand) {
+        match cmd {
+            IpcCommand::AddTorrent { mode, reply } => {
+                let source = TorrentSource::File(mode.dir().clone());
+
+                let result = self
+                    .add_torrent(mode, source)
+                    .await
+                    .map_err(|e| e.to_string());
+
+                let _ = reply.send(result);
+            }
+        }
+    }
 }
 
 #[async_trait]
-impl Torreting for Bqti {
-    async fn append(
+impl Torrenting for Bqti {
+    async fn add_torrent(
         &self,
         mode: SessionMode,
-        torrent: TorrentFile,
-    ) -> Result<(), BqtiTorretingError> {
-        self.manager.add(mode, &torrent).await;
+        source: TorrentSource,
+    ) -> Result<String, BqtiTorretingError> {
+        let torrent = match source {
+            TorrentSource::Magnet(_uri) => {
+                Err(BqtiTorretingError::Unsupported("magnet links".into()))
+            }
+            TorrentSource::File(path) => {
+                load(&path).map_err(|_| BqtiTorretingError::FailedToLoad())
+            }
+        }?;
 
-        Ok(())
+        torrent.validate()?;
+        let info_hash = torrent.info_hash().to_string();
+
+        self.torrenting_session.add(mode, &torrent).await;
+
+        Ok(info_hash)
     }
 }

@@ -9,7 +9,7 @@ use crate::{
         pex::PexRouter,
         torrent::metainfo::{InfoHash, Metainfo},
     },
-    dht::{BootStrap, Kademlia, KademliaClient, Key, Node, NodeError, TorrentDht},
+    dht::{BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht},
     network::{ConnectionManager, ConnectionManagerError, Message, Peer},
     session::{
         StandardMessage, StandardMessageError,

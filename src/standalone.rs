@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Subcommand, ValueHint, arg};
-
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{
     BQTIError, BitTorrentError,
@@ -10,22 +8,14 @@ use crate::{
         builder::TorrentBuilder,
         metainfo::{Integrity, Metainfo, TorrentError, TorrentFile},
     },
-    cli::{CreateArgs, TorrentVersion},
-    load, save, utils,
+    cli::{CertType, Torrent, TorrentVersion},
+    load, save,
+    utils::{
+        self,
+        bqti::certs_dir,
+        certs::{make_ca_root, store_cert},
+    },
 };
-
-#[derive(Subcommand)]
-pub enum Torrent {
-    Create(CreateArgs),
-    Inspect {
-        #[arg(value_hint = ValueHint::FilePath)]
-        torrent: PathBuf,
-    },
-    Validate {
-        #[arg(value_hint = ValueHint::FilePath)]
-        torrent: PathBuf,
-    },
-}
 
 fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
     if let Some(name) = &args.name {
@@ -39,7 +29,56 @@ fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
     Ok(file_name)
 }
 
-pub fn create(args: CreateArgs) -> Result<()> {
+pub struct CreateArgs {
+    pub path: PathBuf,
+    pub name: Option<String>,
+    pub files: Vec<PathBuf>,
+    pub version: TorrentVersion,
+    pub announce: Vec<Vec<String>>,
+    pub seeds: Option<Vec<String>>,
+    pub nodes: Option<Vec<String>>,
+    pub piece_length: u64,
+    pub private: bool,
+    pub comment: Option<String>,
+    pub created_by: Option<String>,
+    pub output: Option<String>,
+}
+
+pub fn handle_torrent(torrent: Torrent, verbose: bool) -> Result<()> {
+    match torrent {
+        Torrent::Create {
+            path,
+            name,
+            files,
+            version,
+            announce,
+            seeds,
+            nodes,
+            piece_length,
+            private,
+            comment,
+            created_by,
+            output,
+        } => create(CreateArgs {
+            path,
+            name,
+            files,
+            version,
+            announce,
+            seeds,
+            nodes,
+            piece_length,
+            private,
+            comment,
+            created_by,
+            output,
+        }),
+        Torrent::Inspect { torrent } => inspect(torrent, verbose),
+        Torrent::Validate { torrent } => validate(torrent),
+    }
+}
+
+fn create(args: CreateArgs) -> Result<()> {
     let builder = match args.version {
         TorrentVersion::V1 => {
             TorrentBuilder::with_v1(file_name(&args)?, &args.path, args.piece_length as i64)
@@ -97,7 +136,7 @@ pub fn create(args: CreateArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<()> {
+fn inspect(torrent: PathBuf, verbose: bool) -> Result<()> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
 
     match load(&torrent_path) {
@@ -106,7 +145,7 @@ pub fn inspect(torrent: PathBuf, verbose: bool) -> Result<()> {
     }
 }
 
-pub fn validate(torrent: PathBuf) -> Result<()> {
+fn validate(torrent: PathBuf) -> Result<()> {
     let torrent_path = torrent.to_str().ok_or(BitTorrentError::InvalidPath())?;
     let torrent = load(&torrent_path)?;
     match torrent.validate() {
@@ -115,5 +154,26 @@ pub fn validate(torrent: PathBuf) -> Result<()> {
             Ok(())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+// FIXME handle the output
+pub async fn handle_certs(kind: CertType, _output: Option<PathBuf>) -> Result<()> {
+    let ca_root = make_ca_root().await?;
+    let dir = certs_dir().context("cannot determine certs directory")?;
+
+    match kind {
+        CertType::Root => {
+            info!("done, at {}", dir.display());
+
+            Ok(())
+        }
+        CertType::Leaf => {
+            let leaf_cert = ca_root.leaf("localhost", true)?;
+            store_cert(&leaf_cert, "quic.der", "quic_pk.der").await?;
+            info!("done, at {}", dir.display());
+
+            Ok(())
+        }
     }
 }

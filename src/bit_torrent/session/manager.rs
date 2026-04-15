@@ -11,6 +11,8 @@ use crate::{
     },
 };
 
+// TODO get an snapshot
+
 struct SessionManagerInner {
     by_hash: HashMap<InfoHash, Arc<TorrentSession>>,
     by_peer: HashMap<SocketAddr, Arc<TorrentSession>>,

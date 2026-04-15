@@ -1,7 +1,6 @@
 use crate::session::BLOCK_SIZE;
 
 pub struct PieceAssembler {
-    pub index: u32,
     total_size: u32,
     received_size: u32,
     buffer: Vec<u8>,
@@ -9,11 +8,10 @@ pub struct PieceAssembler {
 }
 
 impl PieceAssembler {
-    pub fn new(index: u32, total_size: u32) -> Self {
+    pub fn new(_index: u32, total_size: u32) -> Self {
         let block_count = total_size.div_ceil(BLOCK_SIZE) as usize;
 
         Self {
-            index,
             total_size,
             received_size: 0,
             buffer: vec![0u8; total_size as usize],
