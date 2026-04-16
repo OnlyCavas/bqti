@@ -69,6 +69,10 @@ pub enum Daemon {
         #[arg(short = 'b', long = "by")]
         created_by: Option<String>,
     },
+    Remove {
+        #[arg(value_name = "INFO_HASH", value_hint = ValueHint::AnyPath)]
+        info_hash: String,
+    },
     Status,
 }
 

@@ -93,6 +93,24 @@ pub enum InfoHash {
     V2(InfoHashV2),
 }
 
+impl InfoHash {
+    pub fn from_hex(s: &str) -> Option<Self> {
+        match s.len() {
+            40 => {
+                let bytes = hex::decode(s).ok()?;
+                let arr: Hash2OBytes = bytes.try_into().ok()?;
+                Some(InfoHash::V1(InfoHashV1(arr)))
+            }
+            64 => {
+                let bytes = hex::decode(s).ok()?;
+                let arr: [u8; 32] = bytes.try_into().ok()?;
+                Some(InfoHash::V2(InfoHashV2(arr)))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Display for InfoHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.as_ref()))

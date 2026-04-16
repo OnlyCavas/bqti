@@ -247,7 +247,19 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
                 magnet_link: torrent.magnet().to_string(),
             })
         }
-        Request::RemoveTorrent { info_hash: _ } => Ok(Response::Handled),
+        Request::RemoveTorrent { info_hash } => {
+            let info_hash = InfoHash::from_hex(&info_hash).ok_or("info hash invalid")?;
+
+            let info_hash = ctx
+                .bqti
+                .remove_torrent(info_hash)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Response::Removed {
+                info_hash: info_hash.to_string(),
+            })
+        }
         Request::Torrents => {
             let current_torrents = {
                 let state = ctx.state.read().await;

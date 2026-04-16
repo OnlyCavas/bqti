@@ -4,11 +4,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    bit_torrent::{
-        chunks::{Downloading, MultiFileHandler, Seeding},
-        torrent::metainfo::Metainfo,
+    bit_torrent::chunks::{Downloading, Seeding},
+    session::{
+        TorrentSessionError,
+        session::TorrentSession,
+        state::{StateResources, TorrentState},
     },
-    session::{resume::ResumeFile, session::TorrentSession, state::TorrentState},
+    torrent::metainfo::TorrentFile,
 };
 
 impl TorrentSession {
@@ -24,40 +26,53 @@ impl TorrentSession {
 
     pub async fn transition_downloading(
         self: &Arc<Self>,
-        handler: MultiFileHandler<Downloading>,
-        resource: &Path,
-        user_space_pwd: &Path,
-    ) {
+        metafile: &TorrentFile,
+        user_space: &Path,
+    ) -> Result<(), TorrentSessionError> {
         let (tx, rx) = mpsc::channel(64);
         let token = CancellationToken::new();
+        let resources = StateResources::<Downloading>::download(&metafile).await?;
 
-        if let Some(resume) = ResumeFile::open(&resource, self.metadata.info_hash()).await {
+        let path = resources.get_concrete_path();
+        if let Some(resume) = resources.get_resume().await {
             debug!("found, resume file ... loading progress ...");
             *self.bitfield.write().await = resume.get_bitfield();
         }
 
         self.swap_state(TorrentState::Downloading {
-            handler: Some(handler),
+            resources: Some(resources),
             token: token.clone(),
             tx,
+            path,
         })
         .await;
 
-        self.spawn_downloader(resource, user_space_pwd, rx, token.clone());
+        self.spawn_downloader(user_space, rx, token.clone())
     }
 
-    pub async fn transition_seeding(self: &Arc<Self>, handler: MultiFileHandler<Seeding>) {
+    pub async fn transition_seeding(
+        self: &Arc<Self>,
+        metafile: &TorrentFile,
+        user_space: &Path,
+    ) -> Result<(), TorrentSessionError> {
         let (tx, rx) = mpsc::channel(256);
         let token = CancellationToken::new();
 
+        let (resources, bitfield) =
+            StateResources::<Seeding>::seed(user_space.into(), metafile).await?;
+
+        let path = resources.get_concrete_path();
+        *self.bitfield.write().await = bitfield;
+
         self.swap_state(TorrentState::Seeding {
-            handler: Some(handler),
             token: token.clone(),
             tx,
+            resources: Some(resources),
+            path,
         })
         .await;
 
-        self.spawn_seeder(rx, token.clone());
+        self.spawn_seeder(rx, token.clone())
     }
 
     pub async fn transition_idle(self: &Arc<Self>) {

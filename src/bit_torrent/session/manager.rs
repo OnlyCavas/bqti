@@ -114,6 +114,17 @@ impl SessionManager {
 
         if let Some(session) = inner.by_hash.remove(info_hash) {
             inner.by_peer.retain(|_, s| !Arc::ptr_eq(s, &session));
+
+            let mut state = session.state.write().await;
+
+            info!("state before purge: {:?}", std::mem::discriminant(&*state));
+            info!("got write lock, calling purge");
+            let fut = state.purge(); // this logs "did i execute?"
+            info!("future created, awaiting");
+            match fut.await {
+                Ok(_) => info!("purge complete"),
+                Err(e) => error!("purge failed: {}", e),
+            }
         }
     }
 }

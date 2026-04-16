@@ -2,7 +2,10 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use tokio::{
@@ -13,20 +16,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     bit_torrent::{
-        chunks::{MultiFileHandler, PieceAssembler, Reader, Seeding, Writer},
+        chunks::{PieceAssembler, Reader, Writer},
         torrent::metainfo::{Metainfo, PieceIntegrity, TorrentFile},
     },
     dht::{Key, Node},
-    hasher::Sha1Hash,
-    save,
     session::{
         BepId, StandardMessage, TorrentSessionError,
         bep::{BepRouter, PeerState, Pipeline},
         bit_field::BitField,
-        resume::ResumeFile,
         state::TorrentState,
     },
-    utils,
 };
 
 pub enum SessionMode {
@@ -52,6 +51,8 @@ pub struct TorrentSession {
 
     peers: RwLock<HashMap<SocketAddr, PeerState>>,
     assemblers: RwLock<HashMap<u32, PieceAssembler>>,
+
+    purge_on_drop: AtomicBool,
 }
 
 pub struct PieceRequest {
@@ -68,7 +69,6 @@ impl TorrentSession {
         bep_router: Arc<BepRouter>,
     ) -> Result<Arc<Self>, TorrentSessionError> {
         let piece_count = metadata.piece_hashes().len();
-        let piece_length = metadata.piece_length();
 
         let session = Arc::new(Self {
             metadata: metadata.clone(),
@@ -77,65 +77,19 @@ impl TorrentSession {
             bep_router: bep_router.clone(),
             peers: RwLock::new(HashMap::new()),
             assemblers: RwLock::new(HashMap::new()),
+            purge_on_drop: AtomicBool::new(false),
         });
-
-        let files = session.metadata.files();
-        let info_hash = session.metadata.info_hash();
 
         match mode {
             SessionMode::Seed { source_dir } => {
                 debug!("files found, loading pieces...");
-
-                let Some(uploads) = &utils::bqti::uploads_dir(
-                    &source_dir,
-                    &info_hash.to_string(),
-                    &session.metadata,
-                ) else {
-                    return Err(TorrentSessionError::UnableToFindXDGFolder());
-                };
-
-                let handler = MultiFileHandler::seed(&uploads, piece_length, files).await?;
-                let resume = ResumeFile::open(&uploads, session.metadata.info_hash()).await;
-                let seed_metadata_path = uploads.join(".torrent");
-
-                if !seed_metadata_path.exists() {
-                    match save(seed_metadata_path, &metadata) {
-                        Ok(_) => debug!("persist {} .torrent", metadata.info_hash().to_string()),
-                        Err(_) => error!("failed to persist .torrent"),
-                    }
-                }
-
-                let bitfield = match resume {
-                    Some(r) if r.is_complete() => r.get_bitfield(),
-                    _ => {
-                        let verified =
-                            Self::verify_pieces(&handler, &session.metadata.piece_hashes()).await?;
-
-                        let data = ResumeFile::new(info_hash, verified.clone(), &uploads);
-
-                        if let Err(e) = data.persist(&uploads).await {
-                            warn!("Failed to persist resume: {}", e);
-                        }
-
-                        verified
-                    }
-                };
-
-                *session.bitfield.write().await = bitfield;
-                session.transition_seeding(handler).await;
+                session.transition_seeding(&metadata, &source_dir).await?;
             }
             SessionMode::Download { target_dir } => {
                 info!("no files found, starting download");
-
-                let Some(bqti_path) = utils::bqti::downloads_dir(info_hash.to_string()) else {
-                    return Err(TorrentSessionError::UnableToFindXDGFolder());
-                };
-
-                let handler = MultiFileHandler::download(&bqti_path, piece_length, files).await?;
-
                 session
-                    .transition_downloading(handler, &bqti_path, &target_dir)
-                    .await;
+                    .transition_downloading(&metadata, &target_dir)
+                    .await?;
             }
         };
 
@@ -144,51 +98,14 @@ impl TorrentSession {
         Ok(session)
     }
 
-    async fn verify_pieces(
-        handler: &MultiFileHandler<Seeding>,
-        piece_hashes: &[Vec<u8>],
-    ) -> Result<BitField, TorrentSessionError> {
-        let mut bitfield = BitField::empty(piece_hashes.len());
-
-        for (index, expected) in piece_hashes.iter().enumerate() {
-            let data = handler.read_piece(index as u32).await?;
-            let piece_hash = *Sha1Hash::digest(&data).as_bytes();
-
-            if piece_hash.as_slice() == expected.as_slice() {
-                bitfield.set(index);
-                info!("piece {} verified", index);
-            } else {
-                warn!("piece {} corrupted or missing", index);
-            }
-        }
-
-        Ok(bitfield)
-    }
-
-    async fn persist_resume(&self, resource_path: &Path) {
-        let info_hash = self.metadata.info_hash();
-        let bitfield = {
-            let bitfield = self.bitfield.read().await;
-            bitfield.clone()
-        };
-
-        let data = ResumeFile::new(info_hash, bitfield, resource_path);
-
-        if let Err(e) = data.persist(resource_path).await {
-            warn!("failed to persist resume data: {}", e);
-        }
-    }
-
     pub(crate) fn spawn_downloader(
         self: &Arc<Self>,
-        resource_path: &Path,
-        user_space_pwd: &Path,
+        user_space: &Path,
         mut downloader: mpsc::Receiver<(u32, Vec<u8>)>,
         cancellation_token: CancellationToken,
-    ) {
+    ) -> Result<(), TorrentSessionError> {
         let weak_ptr = Arc::downgrade(self);
-        let path = PathBuf::from(resource_path);
-        let user_space = PathBuf::from(user_space_pwd);
+        let user_space = PathBuf::from(user_space);
 
         tokio::spawn(async move {
             let session = match weak_ptr.upgrade() {
@@ -197,9 +114,10 @@ impl TorrentSession {
             };
 
             let mut state = session.state.write().await;
-            let Some(downloader_handler) = state.take_downloading_handler() else {
+            let Some(resources) = state.take_downloading() else {
                 return;
             };
+
             drop(state);
 
             let piece_count = session.metadata.piece_hashes().len() - 1;
@@ -220,10 +138,10 @@ impl TorrentSession {
                                 continue;
                             }
 
-                            match downloader_handler.write_piece(index, data).await {
+                            match resources.handler.write_piece(index, data).await {
                                 Ok(_) => {
                                     info!("piece {} persisted", index);
-                                    session.persist_resume(&path).await;
+                                    resources.persist_resume(&session).await;
                                 },
                                 Err(e) => warn!("failed to persist piece {}: {}", index, e),
                             }
@@ -239,30 +157,34 @@ impl TorrentSession {
 
             debug!("finish downloading, trying to switch to seeding...");
 
-            let info_hash = session.metadata.info_hash();
+            // TODO needs to be at the client
+            // let info_hash = session.metadata.info_hash();
+            //
+            // match utils::bqti::link(user_space, info_hash.to_string()).await {
+            //     Ok(_) => info!("check, download/"),
+            //     Err(e) => error!("fuck, {}", e),
+            // }
 
-            match utils::bqti::link(user_space, info_hash.to_string()).await {
-                Ok(_) => info!("check, download/"),
-                Err(e) => error!("fuck, {}", e),
-            }
-
-            match downloader_handler
-                .into_seeding(session.metadata.files(), &path)
+            match session
+                .transition_seeding(&session.metadata, &user_space)
                 .await
             {
-                Ok(seeding) => session.transition_seeding(seeding).await,
+                Ok(_) => (),
                 Err(_) => {
-                    warn!("failed to transition to seeding state");
+                    error!("failed to transition to seeding");
+                    return;
                 }
-            }
+            };
         });
+
+        Ok(())
     }
 
     pub(crate) fn spawn_seeder(
         self: &Arc<Self>,
         mut uploader: mpsc::Receiver<PieceRequest>,
         cancellation_token: CancellationToken,
-    ) {
+    ) -> Result<(), TorrentSessionError> {
         let weak_ptr = Arc::downgrade(self);
 
         tokio::spawn(async move {
@@ -272,7 +194,7 @@ impl TorrentSession {
             };
 
             let mut state = session.state.write().await;
-            let Some(seeding_handler) = state.take_seeder_handler() else {
+            let Some(resources) = state.take_seeding() else {
                 return;
             };
             drop(state);
@@ -291,7 +213,7 @@ impl TorrentSession {
                             break;
                         },
                         Some(PieceRequest { index, begin, length, respond }) => {
-                             match seeding_handler.read_piece(index).await {
+                             match resources.handler.read_piece(index).await {
                                 Ok(data) => {
                                     let begin = begin as usize;
                                     let end = (begin + length as usize).min(data.len());
@@ -308,6 +230,8 @@ impl TorrentSession {
             debug!("stoped seeding, state: idle");
             session.transition_idle().await
         });
+
+        Ok(())
     }
 
     pub async fn send_downloaded_piece(&self, index: u32, data: Vec<u8>) {
@@ -373,6 +297,10 @@ impl TorrentSession {
 }
 
 impl TorrentSession {
+    pub fn purge(&self) {
+        self.purge_on_drop.store(true, Ordering::Relaxed);
+    }
+
     pub async fn get_pipeline(&self, src: SocketAddr) -> Option<Arc<Pipeline>> {
         let peers = self.peers.read().await;
 

@@ -49,6 +49,9 @@ pub enum Response {
     TorrentAdded {
         info_hash: String,
     }, // Add Torrent Response
+    Removed {
+        info_hash: String,
+    },
     SeedingStarted {
         info_hash: String,
         magnet_link: String,

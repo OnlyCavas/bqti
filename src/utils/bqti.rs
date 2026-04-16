@@ -52,13 +52,11 @@ pub async fn link(user_downloads_dir: PathBuf, info_hash_hex: String) -> io::Res
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
 }
 
-pub fn uploads_dir(
-    user_base: &Path,
-    info_hash_hex: &str,
-    metadata: &TorrentFile,
-) -> Option<PathBuf> {
+pub fn uploads_dir(user_base: &Path, metadata: &TorrentFile) -> Option<PathBuf> {
     let bqti_dir = bqti_data_dir()?;
-    let internal_base = bqti_dir.join("uploads").join(info_hash_hex);
+    let internal_base = bqti_dir
+        .join("uploads")
+        .join(metadata.info_hash().to_string());
 
     for file in metadata.files() {
         let rel_path = &file.to_path();

@@ -23,7 +23,7 @@ pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
                 get_pwd(&torrent)?
             };
 
-            (Request::AddDownload { link }, handle_torrent_added)
+            (Request::AddDownload { link }, handle_incoming)
         }
         Daemon::Seed {
             path,
@@ -48,10 +48,11 @@ pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
                     comment,
                     created_by,
                 },
-                handle_torrent_added,
+                handle_incoming,
             )
         }
-        Daemon::Status => (Request::Status, handle_status),
+        Daemon::Remove { info_hash } => (Request::RemoveTorrent { info_hash }, handle_incoming),
+        Daemon::Status => (Request::Status, handle_incoming),
     };
 
     let response = ipc(request).await?;
@@ -59,19 +60,7 @@ pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
     handler(response)
 }
 
-async fn ipc(request: Request) -> anyhow::Result<Response> {
-    let mut socket = Socket::connect()
-        .await
-        .context("could not connect to bqti daemon — is it running?")?;
-
-    socket
-        .send(request)
-        .await
-        .context("error communicating with bqti")?
-        .map_err(|e| anyhow::anyhow!(e).context("bqti returned an error"))
-}
-
-fn handle_torrent_added(response: Response) -> anyhow::Result<()> {
+fn handle_incoming(response: Response) -> anyhow::Result<()> {
     match response {
         Response::TorrentAdded { info_hash } => {
             info!("{} queued", info_hash);
@@ -87,13 +76,11 @@ fn handle_torrent_added(response: Response) -> anyhow::Result<()> {
 
             Ok(())
         }
+        Response::Removed { info_hash } => {
+            info!("{} removed", info_hash);
 
-        unexpected => anyhow::bail!("unexpected response: {unexpected:?}"),
-    }
-}
-
-fn handle_status(response: Response) -> anyhow::Result<()> {
-    match response {
+            Ok(())
+        }
         Response::Status(status) => {
             info!("{}", status);
 
@@ -101,4 +88,16 @@ fn handle_status(response: Response) -> anyhow::Result<()> {
         }
         unexpected => anyhow::bail!("unexpected response: {unexpected:?}"),
     }
+}
+
+async fn ipc(request: Request) -> anyhow::Result<Response> {
+    let mut socket = Socket::connect()
+        .await
+        .context("could not connect to bqti daemon — is it running?")?;
+
+    socket
+        .send(request)
+        .await
+        .context("error communicating with bqti")?
+        .map_err(|e| anyhow::anyhow!(e).context("bqti returned an error"))
 }

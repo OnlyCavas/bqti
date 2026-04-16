@@ -91,14 +91,6 @@ impl MultiFileHandler<Seeding> {
 }
 
 impl MultiFileHandler<Downloading> {
-    pub async fn into_seeding(
-        self,
-        files: &[EmbededFile],
-        resources: &Path,
-    ) -> Result<MultiFileHandler<Seeding>, ChunkHandlerError> {
-        MultiFileHandler::seed(resources, PieceLength(self.piece_length), &files).await
-    }
-
     pub async fn download(
         base_path: &Path,
         piece_length: PieceLength,
