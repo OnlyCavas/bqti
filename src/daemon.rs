@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use bqti_ipc::{Request, Response, Socket};
-
 use crate::{
     Bqti,
-    ipc::server::IpcServer,
     network::{ConnectionManager, ManagerOptions, Peer, QuicEndpointBuilder},
     utils,
 };
@@ -23,56 +20,9 @@ pub async fn handle_serve(addr: String) -> anyhow::Result<()> {
     );
 
     let (manager, stream_rx) = ConnectionManager::new(endpoint_config, ManagerOptions::default())?;
-    let (ipc, cmd_rx) = IpcServer::bind().await?;
 
-    let mut bit_torrent = Bqti::new(Arc::new(manager), leaf_kademlia)?;
-    bit_torrent.serve_forever(stream_rx, cmd_rx).await?;
-
-    drop(ipc);
-
-    Ok(())
-}
-
-pub async fn handle_download(torrent: String, _output: String) -> anyhow::Result<()> {
-    let mut socket = Socket::connect().await?;
-
-    let response = socket
-        .send(Request::AddDownload { source: torrent })
-        .await?
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-    match response {
-        Response::TorrentAdded { info_hash } => {
-            info!("torrent added: {info_hash}");
-
-            println!("{info_hash}");
-        }
-        unexpected => {
-            anyhow::bail!("unexpected response from daemon: {unexpected:?}");
-        }
-    }
-
-    Ok(())
-}
-
-pub async fn handle_seed(torrent: String, _output: String) -> anyhow::Result<()> {
-    let mut socket = Socket::connect().await?;
-
-    let response = socket
-        .send(Request::AddDownload { source: torrent })
-        .await?
-        .map_err(|e| anyhow::anyhow!(e))?;
-
-    match response {
-        Response::TorrentAdded { info_hash } => {
-            info!("torrent added: {info_hash}");
-
-            println!("{info_hash}");
-        }
-        unexpected => {
-            anyhow::bail!("unexpected response from daemon: {unexpected:?}");
-        }
-    }
+    let bit_torrent = Bqti::new(Arc::new(manager), leaf_kademlia)?;
+    bit_torrent.serve_forever(stream_rx).await?;
 
     Ok(())
 }

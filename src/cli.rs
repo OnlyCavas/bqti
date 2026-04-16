@@ -13,10 +13,6 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum SubCommand {
-    // Serve(ServeArgs),
-    // Download(DownloadArgs),
-    // Seed(SeedArgs),
-    // Ipc(CreateArgs),
     Serve {
         #[arg(value_parser = parse_addr)]
         addr: String,
@@ -42,7 +38,7 @@ pub enum SubCommand {
 #[derive(Subcommand)]
 pub enum Daemon {
     Download {
-        #[arg(value_name = "TORRENT")]
+        #[arg(value_name = "TORRENT", value_hint = ValueHint::AnyPath)]
         torrent: String,
 
         #[arg(value_name = "OUTPUT")]
@@ -51,6 +47,27 @@ pub enum Daemon {
     Seed {
         #[arg(value_name = "PATH")]
         path: String,
+
+        #[arg(short = 't', long = "tracker", num_args = 1.., value_parser = parse_tier)]
+        announce: Vec<Vec<String>>,
+
+        #[arg(short = 's', long = "seeds", num_args = 1..)]
+        seeds: Option<Vec<String>>,
+
+        #[arg(long = "bootstrap", num_args = 1..)]
+        nodes: Option<Vec<String>>,
+
+        #[arg(short = 'l', long = "length", default_value_t = 524288)]
+        piece_length: u64,
+
+        #[arg(short, long)]
+        private: bool,
+
+        #[arg(short, long)]
+        comment: Option<String>,
+
+        #[arg(short = 'b', long = "by")]
+        created_by: Option<String>,
     },
     Status,
 }

@@ -9,6 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 mod socket;
+pub mod state;
 
 pub use socket::Socket;
 
@@ -19,11 +20,23 @@ pub type Reply = Result<Response, String>;
 #[serde(tag = "type", content = "payload")]
 pub enum Request {
     Status,
-    // Add a torrent to queue: path or magnet
-    AddDownload { source: String },
-    AddSeed { source: String },
+    AddDownload {
+        link: String,
+    },
+    AddSeed {
+        path: String,
+        piece_length: u64,
+        announce: Vec<Vec<String>>,
+        seeds: Option<Vec<String>>,
+        nodes: Option<Vec<String>>,
+        private: bool,
+        comment: Option<String>,
+        created_by: Option<String>,
+    },
     // Remove a torrent
-    RemoveTorrent { info_hash: String },
+    RemoveTorrent {
+        info_hash: String,
+    },
     Torrents,
     Shutdown,
     EventStream, // start a event stream of concorrent events
@@ -33,45 +46,38 @@ pub enum Request {
 #[serde(tag = "type", content = "payload")]
 pub enum Response {
     Handled,
-    TorrentAdded { info_hash: String }, // Add Torrent Response
+    TorrentAdded {
+        info_hash: String,
+    }, // Add Torrent Response
+    SeedingStarted {
+        info_hash: String,
+        magnet_link: String,
+    }, // Add torrent to be seeded
     Status(DaemonStatus),
-    Torrents(Vec<TorrentInfo>),
-    Torrent(TorrentInfo),
+    Torrents(Vec<Torrent>),
+    Torrent(Torrent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Event {
-    DownloadStarted {
-        info_hash: String,
-        name: String,
-    },
-    DownloadComplete {
-        info_hash: String,
-    },
-    SeedStarted {
-        info_hash: String,
-    },
-    PieceDownloaded {
-        info_hash: String,
-        index: u32,
-    },
-    StateChanged {
-        info_hash: String,
-        state: TorrentState,
-    },
-    Error {
-        info_hash: String,
-        message: String,
-    },
+    DownloadStarted { info_hash: String, name: String },
+    DownloadComplete { info_hash: String },
+    SeedStarted { info_hash: String },
+    PieceDownloaded { info_hash: String, index: u32 },
+    Error { info_hash: String, message: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub enum TorrentState {
-    Idle,
     Downloading,
     Seeding,
-    Stopped,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Torrent {
+    pub info_hash: String,
+    pub state: TorrentState,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -99,11 +105,6 @@ fn fmt_bytes(bytes: u64) -> String {
         b if b < 1_073_741_824 => format!("{:.1} MB", b as f64 / 1_048_576.0),
         b => format!("{:.1} GB", b as f64 / 1_073_741_824.0),
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TorrentInfo {
-    pub info_hash: String,
 }
 
 pub fn socket_path() -> io::Result<PathBuf> {

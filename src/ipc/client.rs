@@ -5,13 +5,52 @@ use crate::cli::Daemon;
 
 type DeamonHandler = fn(Response) -> anyhow::Result<()>;
 
+fn get_pwd(link: &str) -> anyhow::Result<String> {
+    let pwd = std::env::current_dir()?
+        .join(link)
+        .to_string_lossy()
+        .into_owned();
+
+    Ok(pwd)
+}
+
 pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
     let (request, handler): (Request, DeamonHandler) = match cli {
-        Daemon::Download { torrent, output: _ } => (
-            Request::AddDownload { source: torrent },
-            handle_torrent_added,
-        ),
-        Daemon::Seed { path } => (Request::AddDownload { source: path }, handle_torrent_added),
+        Daemon::Download { torrent, output: _ } => {
+            let link = if torrent.starts_with("magnet:") {
+                torrent
+            } else {
+                get_pwd(&torrent)?
+            };
+
+            (Request::AddDownload { link }, handle_torrent_added)
+        }
+        Daemon::Seed {
+            path,
+            announce,
+            seeds,
+            nodes,
+            piece_length,
+            private,
+            comment,
+            created_by,
+        } => {
+            let path = get_pwd(&path)?;
+
+            (
+                Request::AddSeed {
+                    path,
+                    piece_length,
+                    announce,
+                    seeds,
+                    nodes,
+                    private,
+                    comment,
+                    created_by,
+                },
+                handle_torrent_added,
+            )
+        }
         Daemon::Status => (Request::Status, handle_status),
     };
 
@@ -39,6 +78,16 @@ fn handle_torrent_added(response: Response) -> anyhow::Result<()> {
 
             Ok(())
         }
+        Response::SeedingStarted {
+            info_hash,
+            magnet_link,
+        } => {
+            info!("{} queued", info_hash);
+            info!("magnet link: {}", magnet_link);
+
+            Ok(())
+        }
+
         unexpected => anyhow::bail!("unexpected response: {unexpected:?}"),
     }
 }

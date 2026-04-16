@@ -3,11 +3,13 @@ use std::{net::SocketAddr, path::PathBuf};
 use crate::{
     bit_torrent::{
         bencode::{BencodeMode, BencodeTorrent, FileInfo},
+        magnet::MagnetLink,
         torrent::metainfo::{
             InfoHash, Integrity, Metainfo, PieceIntegrity, PieceLength, TorrentCommon, TorrentError,
         },
     },
     hasher::Sha1Hash,
+    torrent::metainfo::Magnet,
     types::{ByteSize, PieceByte},
 };
 
@@ -133,6 +135,27 @@ impl TorrentV1 {
             metadata.info.pieces,
             mode,
         ))
+    }
+}
+
+impl Magnet for TorrentV1 {
+    fn magnet(&self) -> MagnetLink {
+        MagnetLink {
+            hash: self.info_hash().to_string(),
+            name: Some(self.name().to_string()),
+            bootstrap: self.dht_nodes().map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
+            trackers: self
+                .announce_list()
+                .map(|tiers| tiers.iter().flatten().cloned().collect())
+                .unwrap_or_default(),
+            web_seed: self.web_seeds().and_then(|seeds| seeds.first().cloned()),
+        }
     }
 }
 

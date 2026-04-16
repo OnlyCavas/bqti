@@ -1,31 +1,41 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
-use bqti_ipc::{Event, Reply, Request, Response, socket_path};
+use bqti_ipc::{Event, Reply, Request, Response, socket_path, state::IpcState};
+use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
-    sync::{
-        broadcast,
-        mpsc::{self, Sender},
-        oneshot,
-    },
+    sync::{RwLock, broadcast, oneshot},
 };
 
-use crate::session::SessionMode;
+use crate::{
+    SeedingOptions, TorrentAction, TorrentSource, Torrenting,
+    session::SessionMode,
+    torrent::metainfo::{InfoHash, Magnet, Metainfo},
+};
 
 const EVENT_STREAM_BUFFER_SIZE: usize = 64;
+
+#[derive(Debug, Error)]
+pub enum IpcCommandError {
+    #[error("failed to add torrent file to download queue")]
+    AddTorrentError(),
+}
+
+pub type TorrentingHandle = Arc<dyn Torrenting + Send + Sync>;
 
 pub enum IpcCommand {
     AddTorrent {
         mode: SessionMode,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<Result<InfoHash, IpcCommandError>>,
     },
 }
 
 struct ClientCtx {
     event_tx: broadcast::Sender<Event>,
-    cmd_tx: Sender<IpcCommand>,
+    state: Arc<RwLock<IpcState>>,
+    bqti: TorrentingHandle,
 }
 
 pub struct IpcServer {
@@ -34,7 +44,7 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    pub async fn bind() -> anyhow::Result<(Self, mpsc::Receiver<IpcCommand>)> {
+    pub async fn start(bqti: TorrentingHandle) -> anyhow::Result<(Self, Arc<RwLock<IpcState>>)> {
         let path = socket_path().context("failed to get socket path")?;
         let _ = fs::remove_file(&path);
 
@@ -46,11 +56,13 @@ impl IpcServer {
         info!("IPC socket bound at {:?}", path);
 
         let (event_tx, _) = broadcast::channel(EVENT_STREAM_BUFFER_SIZE);
-        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+
+        let state = Arc::new(RwLock::new(IpcState::default()));
 
         let ctx = Arc::new(ClientCtx {
             event_tx: event_tx.clone(),
-            cmd_tx,
+            state: state.clone(),
+            bqti,
         });
 
         tokio::spawn(accept_loop(listener, ctx));
@@ -60,7 +72,7 @@ impl IpcServer {
                 socket_path: path,
                 event_tx,
             },
-            cmd_rx,
+            state,
         ))
     }
 
@@ -100,21 +112,18 @@ async fn accept_loop(listener: UnixListener, ctx: Arc<ClientCtx>) {
 async fn handle_client(stream: UnixStream, ctx: Arc<ClientCtx>) -> anyhow::Result<()> {
     let (read, mut write) = stream.into_split();
     let mut reader = BufReader::new(read);
-    let mut buf = String::new();
 
     loop {
-        buf.clear();
+        let mut buf = Vec::new();
+        let response = reader.read_until(b'\n', &mut buf).await;
 
-        let n = reader
-            .read_line(&mut buf)
-            .await
-            .context("error reading request")?;
-
-        if n == 0 {
-            return Ok(());
+        match response {
+            Ok(0) => return Ok(()),
+            Ok(_) => (),
+            Err(err) => return Err(err).context("error reading request"),
         }
 
-        let request: Result<Request, _> = serde_json::from_str(buf.trim());
+        let request: Result<Request, _> = serde_json::from_slice(&buf);
         let is_event_stream = matches!(request, Ok(Request::EventStream));
 
         let reply: Reply = match request {
@@ -140,13 +149,14 @@ async fn handle_client(stream: UnixStream, ctx: Arc<ClientCtx>) -> anyhow::Resul
     }
 }
 
+// TODO: test event streams
 async fn handle_event_stream(
     write: &mut tokio::net::unix::OwnedWriteHalf,
     ctx: &ClientCtx,
 ) -> anyhow::Result<()> {
     let mut rx = ctx.event_tx.subscribe();
 
-    // TODO: send current state snapshot here
+    // TODO: send currentipc server state snapshot here
     // let snapshot = ctx.state.read().unwrap();
     // for event in snapshot.replicate() { ... }
 
@@ -161,6 +171,7 @@ async fn handle_event_stream(
                         debug!("event stream client disconnected");
                         return Ok(());
                     }
+
                     return Err(e).context("error writing event");
                 }
             }
@@ -184,8 +195,6 @@ async fn handle_event_stream(
 }
 
 async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
-    let (reply_tx, reply_rx) = oneshot::channel();
-
     match request {
         Request::Status => Ok(Response::Status(bqti_ipc::DaemonStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -193,43 +202,63 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
             upload_rate: 0,
             download_rate: 0,
         })),
-        Request::AddDownload { source } => {
-            ctx.cmd_tx
-                .send(IpcCommand::AddTorrent {
-                    mode: SessionMode::Download {
-                        target_dir: source.into(),
-                    },
-                    reply: reply_tx,
+        Request::AddDownload { link } => {
+            let torrent_file = ctx
+                .bqti
+                .add_torrent(TorrentAction::Download {
+                    source: TorrentSource::parse(&link)?,
                 })
                 .await
-                .map_err(|_| "daemon unavailable".to_string())?;
+                .map_err(|e| e.to_string())?;
 
-            let info_hash = reply_rx
-                .await
-                .map_err(|_| "daemon dropped the request".to_string())??;
-
-            Ok(Response::TorrentAdded { info_hash })
+            Ok(Response::TorrentAdded {
+                info_hash: torrent_file.info_hash().to_string(),
+            })
         }
-        Request::AddSeed { source } => {
-            ctx.cmd_tx
-                .send(IpcCommand::AddTorrent {
-                    mode: SessionMode::Seed {
-                        source_dir: source.into(),
+        Request::AddSeed {
+            path,
+            piece_length,
+            announce,
+            seeds,
+            nodes,
+            private,
+            comment,
+            created_by,
+        } => {
+            let torrent = ctx
+                .bqti
+                .add_torrent(TorrentAction::Seed {
+                    options: SeedingOptions {
+                        path: path.into(),
+                        announce,
+                        seeds,
+                        nodes,
+                        piece_length,
+                        private,
+                        comment,
+                        created_by,
                     },
-                    reply: reply_tx,
                 })
                 .await
-                .map_err(|_| "daemon unavailable".to_string())?;
+                .map_err(|e| e.to_string())?;
 
-            let info_hash = reply_rx
-                .await
-                .map_err(|_| "daemon dropped the request".to_string())??;
-
-            Ok(Response::TorrentAdded { info_hash })
+            Ok(Response::SeedingStarted {
+                info_hash: torrent.info_hash().to_string(),
+                magnet_link: torrent.magnet().to_string(),
+            })
         }
         Request::RemoveTorrent { info_hash: _ } => Ok(Response::Handled),
-        Request::Torrents => Ok(Response::Torrents(vec![])),
+        Request::Torrents => {
+            let current_torrents = {
+                let state = ctx.state.read().await;
+                state.active_torrents.values().cloned().collect::<Vec<_>>()
+            };
+
+            Ok(Response::Torrents(current_torrents))
+        }
         Request::EventStream => Ok(Response::Handled),
+
+        // FIX maybe pass a cancellation token? on bqti to terminate process
         Request::Shutdown => {
             info!("shutdown requested via IPC");
             std::process::exit(0);

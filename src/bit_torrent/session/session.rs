@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
 };
 
@@ -19,6 +18,7 @@ use crate::{
     },
     dht::{Key, Node},
     hasher::Sha1Hash,
+    save,
     session::{
         BepId, StandardMessage, TorrentSessionError,
         bep::{BepRouter, PeerState, Pipeline},
@@ -71,7 +71,7 @@ impl TorrentSession {
         let piece_length = metadata.piece_length();
 
         let session = Arc::new(Self {
-            metadata,
+            metadata: metadata.clone(),
             state: RwLock::new(TorrentState::Idle),
             bitfield: Arc::new(RwLock::new(BitField::empty(piece_count))),
             bep_router: bep_router.clone(),
@@ -86,7 +86,7 @@ impl TorrentSession {
             SessionMode::Seed { source_dir } => {
                 debug!("files found, loading pieces...");
 
-                let Some(uploads) = utils::bqti::uploads_dir(
+                let Some(uploads) = &utils::bqti::uploads_dir(
                     &source_dir,
                     &info_hash.to_string(),
                     &session.metadata,
@@ -96,6 +96,14 @@ impl TorrentSession {
 
                 let handler = MultiFileHandler::seed(&uploads, piece_length, files).await?;
                 let resume = ResumeFile::open(&uploads, session.metadata.info_hash()).await;
+                let seed_metadata_path = uploads.join(".torrent");
+
+                if !seed_metadata_path.exists() {
+                    match save(seed_metadata_path, &metadata) {
+                        Ok(_) => debug!("persist {} .torrent", metadata.info_hash().to_string()),
+                        Err(_) => error!("failed to persist .torrent"),
+                    }
+                }
 
                 let bitfield = match resume {
                     Some(r) if r.is_complete() => r.get_bitfield(),

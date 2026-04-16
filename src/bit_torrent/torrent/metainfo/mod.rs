@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, fmt::Display, net::SocketAddr};
 
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::{
     bit_torrent::{
         bencode::{BencodeInfo, BencodeTorrent, FileInfo},
+        magnet::MagnetLink,
         torrent::metainfo::{
             v1::{EmbededFile, TorrentV1},
             v2::TorrentV2,
@@ -36,11 +37,16 @@ pub enum TorrentError {
     Unsupported(String),
 }
 
-#[enum_dispatch(Metainfo, Integrity, PieceIntegrity)]
+#[enum_dispatch(Metainfo, Magnet, Integrity, PieceIntegrity)]
 #[derive(Clone)]
 pub enum TorrentFile {
     V1(TorrentV1),
     V2(TorrentV2),
+}
+
+#[enum_dispatch]
+pub trait Magnet {
+    fn magnet(&self) -> MagnetLink;
 }
 
 #[enum_dispatch]
@@ -87,9 +93,9 @@ pub enum InfoHash {
     V2(InfoHashV2),
 }
 
-impl InfoHash {
-    pub fn to_string(&self) -> String {
-        hex::encode(self.as_ref())
+impl Display for InfoHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.as_ref()))
     }
 }
 

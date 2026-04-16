@@ -5,6 +5,7 @@ use clap::error::Result;
 use crate::{
     bit_torrent::{
         bencode::{BencodeFileTreeNode, BencodeTorrent},
+        magnet::MagnetLink,
         torrent::{
             merkle::MerkleTree,
             metainfo::{
@@ -14,6 +15,7 @@ use crate::{
         },
     },
     hasher::Sha256Hash,
+    torrent::metainfo::Magnet,
     types::{Hash32Bytes, MerkleRoot, PieceByte},
 };
 
@@ -194,6 +196,27 @@ impl TorrentV2 {
         }
 
         Ok(())
+    }
+}
+
+impl Magnet for TorrentV2 {
+    fn magnet(&self) -> MagnetLink {
+        MagnetLink {
+            hash: self.info_hash().to_string(),
+            name: Some(self.name().to_string()),
+            bootstrap: self.dht_nodes().map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
+            trackers: self
+                .announce_list()
+                .map(|tiers| tiers.iter().flatten().cloned().collect())
+                .unwrap_or_default(),
+            web_seed: self.web_seeds().and_then(|seeds| seeds.first().cloned()),
+        }
     }
 }
 

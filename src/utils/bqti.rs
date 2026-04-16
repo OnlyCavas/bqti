@@ -63,10 +63,9 @@ pub fn uploads_dir(
     for file in metadata.files() {
         let rel_path = &file.to_path();
 
-        let source_path = user_base.join(rel_path);
         let target_path = internal_base.join(rel_path);
 
-        if !source_path.exists() {
+        if !user_base.exists() {
             return None;
         }
 
@@ -79,7 +78,7 @@ pub fn uploads_dir(
         }
 
         if !target_path.exists() {
-            fs::hard_link(&source_path, &target_path).ok()?;
+            fs::hard_link(&user_base, &target_path).ok()?;
         }
     }
 

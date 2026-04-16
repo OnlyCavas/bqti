@@ -12,6 +12,7 @@ mod chunks;
 pub mod dht;
 mod error;
 pub mod hasher;
+mod magnet;
 
 pub mod network;
 mod pex;
@@ -27,7 +28,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<TorrentFile, BitTorrentError> {
     Ok(torrent)
 }
 
-pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
+pub fn save(path: impl AsRef<Path>, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
     let bencode_data = BencodeTorrent::from(torrent);
     let bytes = encode(&bencode_data).map_err(BitTorrentError::Codec)?;
 
@@ -36,5 +37,5 @@ pub fn save(path: &str, torrent: &TorrentFile) -> Result<(), BitTorrentError> {
     Ok(())
 }
 
-pub use bqti::{Bqti, Torrenting};
+pub use bqti::{Bqti, SeedingOptions, TorrentAction, TorrentSource, Torrenting};
 pub use error::BitTorrentError;

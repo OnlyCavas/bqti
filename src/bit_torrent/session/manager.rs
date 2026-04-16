@@ -111,6 +111,7 @@ impl SessionManager {
 
     pub async fn remove(&self, info_hash: &InfoHash) {
         let mut inner = self.inner.write().await;
+
         if let Some(session) = inner.by_hash.remove(info_hash) {
             inner.by_peer.retain(|_, s| !Arc::ptr_eq(s, &session));
         }
