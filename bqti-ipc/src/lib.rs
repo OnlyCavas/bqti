@@ -19,7 +19,7 @@ pub type Reply = Result<Response, String>;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Request {
-    Status,
+    Status, //
     AddDownload {
         link: String,
     },

@@ -3,8 +3,6 @@ use bqti_ipc::{Request, Response, Socket};
 
 use crate::cli::Daemon;
 
-type DeamonHandler = fn(Response) -> anyhow::Result<()>;
-
 fn get_pwd(link: &str) -> anyhow::Result<String> {
     let pwd = std::env::current_dir()?
         .join(link)
@@ -15,7 +13,7 @@ fn get_pwd(link: &str) -> anyhow::Result<String> {
 }
 
 pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
-    let (request, handler): (Request, DeamonHandler) = match cli {
+    let request: Request = match cli {
         Daemon::Download { torrent, output: _ } => {
             let link = if torrent.starts_with("magnet:") {
                 torrent
@@ -23,7 +21,7 @@ pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
                 get_pwd(&torrent)?
             };
 
-            (Request::AddDownload { link }, handle_incoming)
+            Request::AddDownload { link }
         }
         Daemon::Seed {
             path,
@@ -37,27 +35,22 @@ pub async fn handle_client(cli: Daemon) -> anyhow::Result<()> {
         } => {
             let path = get_pwd(&path)?;
 
-            (
-                Request::AddSeed {
-                    path,
-                    piece_length,
-                    announce,
-                    seeds,
-                    nodes,
-                    private,
-                    comment,
-                    created_by,
-                },
-                handle_incoming,
-            )
+            Request::AddSeed {
+                path,
+                piece_length,
+                announce,
+                seeds,
+                nodes,
+                private,
+                comment,
+                created_by,
+            }
         }
-        Daemon::Remove { info_hash } => (Request::RemoveTorrent { info_hash }, handle_incoming),
-        Daemon::Status => (Request::Status, handle_incoming),
+        Daemon::Remove { info_hash } => Request::RemoveTorrent { info_hash },
+        Daemon::Status => Request::Status,
     };
 
-    let response = ipc(request).await?;
-
-    handler(response)
+    handle_incoming(ipc(request).await?)
 }
 
 fn handle_incoming(response: Response) -> anyhow::Result<()> {
