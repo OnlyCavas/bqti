@@ -13,12 +13,13 @@ use crate::dht::{
     route_table::KBUCKET_MAX,
 };
 
+#[allow(dead_code)]
 const REFRESH_BUCKET_INTERVAL: Duration = Duration::from_millis(50);
+
 const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(5);
 
 #[async_trait]
 impl KademliaClient for Kademlia {
-    // FIXME maybe do this in a seperate thread if not will block while doing the POW
     async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
         let signed_secret = self.request_challange(bootstrap).await?;
         let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
@@ -31,7 +32,6 @@ impl KademliaClient for Kademlia {
         };
 
         self.node_lookup(&host_id).await?;
-        self.refresh_buckets(REFRESH_BUCKET_INTERVAL).await;
 
         Ok(())
     }
@@ -40,8 +40,6 @@ impl KademliaClient for Kademlia {
         let result = self
             .auth_request(target, AuthDhtRequest::Ping, TIMEOUT_EXCEPTION)
             .await?;
-
-        info!("pong");
 
         let DhtResponse::Pong {
             receiver_id: target_id,
@@ -139,6 +137,7 @@ impl Kademlia {
         Ok(boostrap)
     }
 
+    #[allow(dead_code)]
     async fn refresh_buckets(&self, interval: Duration) {
         const BUCKET_RANGE: usize = 40; // global coverage
 
@@ -272,10 +271,6 @@ impl Kademlia {
 
     pub async fn store(&self, key: Key, value: KademliaData) -> Result<(), KademliaError> {
         let closest_nodes = self.node_lookup(&key).await?;
-
-        if closest_nodes.is_empty() {
-            return Err(KademliaError::NoNodesFound());
-        }
 
         let mut future_stores = FuturesUnordered::new();
 

@@ -63,12 +63,11 @@ struct PexSession {
 }
 
 pub struct PexRouter {
-    swarms: RwLock<HashMap<InfoHash, HashSet<SocketAddr>>>, // active peers within a torrent swarm
-    sessions: RwLock<HashMap<SocketAddr, PexSession>>,      // calculate deltas
+    swarms: RwLock<HashMap<InfoHash, HashSet<SocketAddr>>>,
+    sessions: RwLock<HashMap<SocketAddr, PexSession>>,
     connection_manager: Arc<ConnectionManager>,
 }
 
-// NOTE if .torrent has private flag, pex protocol must be disabled
 impl PexRouter {
     fn create(connection_manager: Arc<ConnectionManager>) -> Self {
         Self {

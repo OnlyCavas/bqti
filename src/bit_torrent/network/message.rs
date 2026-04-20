@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use thiserror::Error;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Error)]
 pub enum MessageError {
@@ -8,11 +9,35 @@ pub enum MessageError {
     ParseFailed(),
 }
 
-pub struct Packet(pub Message, pub SocketAddr);
+pub struct Packet {
+    pub message: Message,
+    pub source_addr: SocketAddr,
+    reply: Option<oneshot::Sender<Vec<u8>>>,
+}
 
 impl Packet {
-    pub fn new(message: Message, socket_addr: SocketAddr) -> Self {
-        Self(message, socket_addr)
+    pub fn new(message: Message, source_addr: SocketAddr) -> Self {
+        Self {
+            message,
+            source_addr,
+            reply: None,
+        }
+    }
+
+    pub fn with_reply(
+        message: Message,
+        source: SocketAddr,
+        reply: oneshot::Sender<Vec<u8>>,
+    ) -> Self {
+        Self {
+            message,
+            source_addr: source,
+            reply: Some(reply),
+        }
+    }
+
+    pub fn take_reply(&mut self) -> Option<oneshot::Sender<Vec<u8>>> {
+        self.reply.take()
     }
 }
 

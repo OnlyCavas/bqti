@@ -4,98 +4,165 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use tokio::{
-    sync::{RwLock, mpsc, oneshot},
-    time::Instant,
+    sync::{Mutex, RwLock, mpsc, oneshot},
+    time::{Instant, interval_at, timeout},
 };
+
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     bit_torrent::{
-        chunks::{PieceAssembler, Reader, Writer},
+        chunks::{Reader, Writer},
         torrent::metainfo::{Metainfo, PieceIntegrity, TorrentFile},
     },
     dht::{Key, Node},
+    network::ConnectionManagerError,
     session::{
-        BepId, StandardMessage, TorrentSessionError,
+        BepId, BepRouterError, StandardMessage, TorrentSessionError,
         bep::{BepRouter, PeerState, Pipeline},
         bit_field::BitField,
+        manager::SessionEvent,
         state::TorrentState,
+        transition::Transition,
     },
 };
 
 pub enum SessionMode {
-    Download { target_dir: PathBuf },
+    Download,
     Seed { source_dir: PathBuf },
-}
-
-impl SessionMode {
-    pub fn dir(&self) -> &PathBuf {
-        match self {
-            SessionMode::Download { target_dir } => target_dir,
-            SessionMode::Seed { source_dir } => source_dir,
-        }
-    }
 }
 
 pub struct TorrentSession {
     bep_router: Arc<BepRouter>,
 
-    pub metadata: TorrentFile,
+    pub(crate) metadata: Arc<TorrentFile>,
     pub(crate) state: RwLock<TorrentState>,
     pub(crate) bitfield: Arc<RwLock<BitField>>,
 
     peers: RwLock<HashMap<SocketAddr, PeerState>>,
-    assemblers: RwLock<HashMap<u32, PieceAssembler>>,
 
-    purge_on_drop: AtomicBool,
+    pub(crate) event_tx: mpsc::Sender<SessionEvent>,
+    pub(crate) pending_writes: AtomicUsize,
 }
 
 pub struct PieceRequest {
     pub index: u32,
-    pub begin: u32,
-    pub length: u32,
     pub respond: oneshot::Sender<Vec<u8>>,
 }
 
 impl TorrentSession {
     pub async fn new(
         mode: SessionMode,
-        metadata: TorrentFile,
+        metadata: Arc<TorrentFile>,
         bep_router: Arc<BepRouter>,
+        event_tx: mpsc::Sender<SessionEvent>,
     ) -> Result<Arc<Self>, TorrentSessionError> {
         let piece_count = metadata.piece_hashes().len();
 
         let session = Arc::new(Self {
             metadata: metadata.clone(),
-            state: RwLock::new(TorrentState::Idle),
+            state: RwLock::new(TorrentState::default()),
             bitfield: Arc::new(RwLock::new(BitField::empty(piece_count))),
             bep_router: bep_router.clone(),
             peers: RwLock::new(HashMap::new()),
-            assemblers: RwLock::new(HashMap::new()),
-            purge_on_drop: AtomicBool::new(false),
+            event_tx,
+            pending_writes: AtomicUsize::new(0),
         });
 
         match mode {
             SessionMode::Seed { source_dir } => {
                 debug!("files found, loading pieces...");
-                session.transition_seeding(&metadata, &source_dir).await?;
-            }
-            SessionMode::Download { target_dir } => {
-                info!("no files found, starting download");
+
                 session
-                    .transition_downloading(&metadata, &target_dir)
+                    .transition(Transition::Seed {
+                        path: source_dir,
+                        metafile: metadata.clone(),
+                    })
+                    .await?;
+            }
+            SessionMode::Download => {
+                info!("no files found, starting download");
+
+                session
+                    .transition(Transition::Download {
+                        metafile: metadata.clone(),
+                    })
                     .await?;
             }
         };
 
+        let mut disc_rx = bep_router.subscribe_disconnects();
+        let weak_session = Arc::downgrade(&session);
+
+        tokio::spawn(async move {
+            while let Ok(addr) = disc_rx.recv().await {
+                if let Some(session) = weak_session.upgrade() {
+                    session.terminate_with(&addr).await;
+                }
+            }
+        });
+
         bep_router.start_peer_discovery(session.clone());
 
         Ok(session)
+    }
+
+    pub(crate) async fn send_event(&self, event: SessionEvent) {
+        match self.event_tx.send(event).await {
+            Ok(_) => (),
+            Err(e) => warn!("failed to send (Session Event): {}", e.to_string()),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn spawn_interest_prober(
+        self: &Arc<Self>,
+        token: CancellationToken,
+    ) -> Result<(), TorrentSessionError> {
+        let weak_ptr = Arc::downgrade(self);
+
+        tokio::spawn(async move {
+            let start = tokio::time::Instant::now() + Duration::from_secs(2);
+            let mut interval = tokio::time::interval_at(start, Duration::from_secs(15));
+
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        break
+                    },
+                    _ = interval.tick() => {
+                        let session = match weak_ptr.upgrade() {
+                            Some(s) => s,
+                            None => return,
+                        };
+
+                        let guard = session.peers.read().await;
+                        let bitfield = session.get_bitfield().await;
+
+                        for (peer, state) in guard.iter() {
+                            let PeerState::Active(pipeline) = state else { continue };
+
+                            info!("evaluating for interest {:?}", peer);
+
+                            if pipeline.evaluate_interest(&bitfield).await {
+                                match session.bep_router.send(*peer, StandardMessage::Interested).await {
+                                    Ok(_) => (),
+                                    Err(_) => warn!("failed to show interest"),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
     pub(crate) fn spawn_downloader(
@@ -114,67 +181,130 @@ impl TorrentSession {
             };
 
             let mut state = session.state.write().await;
+
             let Some(resources) = state.take_downloading() else {
                 return;
             };
 
             drop(state);
 
+            session.broadcast(StandardMessage::Interested).await;
+
             let piece_count = session.metadata.piece_hashes().len() - 1;
+            let resources = Arc::new(resources);
+
+            let (done_tx, mut done_rx) = oneshot::channel::<()>();
+            let done_tx = Arc::new(Mutex::new(Some(done_tx)));
+
+            let mut resume_interval = interval_at(
+                Instant::now() + Duration::from_secs(20),
+                Duration::from_secs(1),
+            );
 
             loop {
                 tokio::select! {
                     biased;
+
                     _ = cancellation_token.cancelled() => {
-                        return;
+                        break;
+                    }
+
+                    _ = &mut done_rx => {
+                        break;
+                    }
+
+                    _ = resume_interval.tick() => {
+                        resources.persist_resume(&session).await;
                     },
+
                     message = downloader.recv() => match message {
                         None => {
-                            info!("downloader is closed");
                             break;
-                        },
+                        }
                         Some((index, data)) => {
-                            if !session.metadata.verify_hash(index, &data).is_ok() {
-                                continue;
-                            }
+                            let session = Arc::downgrade(&session);
+                            let resources = Arc::downgrade(&resources);
+                            let done_tx = done_tx.clone();
 
-                            match resources.handler.write_piece(index, data).await {
-                                Ok(_) => {
-                                    info!("piece {} persisted", index);
-                                    resources.persist_resume(&session).await;
-                                },
-                                Err(e) => warn!("failed to persist piece {}: {}", index, e),
-                            }
+                            tokio::spawn(async move {
+                                let session = match session.upgrade() {
+                                    Some(s) => s,
+                                    None => return,
+                                };
 
+                                let resources = match resources.upgrade() {
+                                    Some(s) => s,
+                                    None => return,
+                                };
 
-                            if index == piece_count as u32 {
-                                break;
-                            }
+                                if session.metadata.verify_hash(index, &data).is_err() {
+                                    session.pending_writes.fetch_sub(1, Ordering::Relaxed);
+                                    return;
+                                }
+
+                                match resources.handler.write_piece(index, data).await {
+                                    Ok(_) => {
+                                        session.pending_writes.fetch_sub(1, Ordering::Relaxed);
+
+                                        session.send_event(SessionEvent::PieceDownloaded {
+                                            total_pieces: piece_count as u32,
+                                            current: index,
+                                        }).await;
+
+                                        let current_bitfield = session.bitfield.read().await;
+
+                                        if current_bitfield.count() != piece_count + 1 {
+                                            return;
+                                        }
+
+                                        if let Some(tx) = done_tx.lock().await.take() {
+                                            let _ = tx.send(());
+                                        }
+                                    }
+                                    Err(e) => {
+                                        session.pending_writes.fetch_sub(1, Ordering::Relaxed);
+                                        warn!("failed to persist piece {}: {}", index, e);
+                                    }
+                                }
+                            });
                         }
                     }
                 }
             }
 
+            resources.persist_resume(&session).await;
+
+            drop(done_tx);
+            drop(resources);
+
+            session.broadcast(StandardMessage::NotInterested).await;
+
+            if cancellation_token.is_cancelled() {
+                return;
+            }
+
+            cancellation_token.cancel();
+
             debug!("finish downloading, trying to switch to seeding...");
 
-            // TODO needs to be at the client
-            // let info_hash = session.metadata.info_hash();
-            //
-            // match utils::bqti::link(user_space, info_hash.to_string()).await {
-            //     Ok(_) => info!("check, download/"),
-            //     Err(e) => error!("fuck, {}", e),
-            // }
+            session
+                .send_event(SessionEvent::DownloadCompleted {
+                    resource_path: user_space.to_string_lossy().to_string(),
+                })
+                .await;
 
             match session
-                .transition_seeding(&session.metadata, &user_space)
+                .transition(Transition::Seed {
+                    path: user_space,
+                    metafile: session.metadata.clone(),
+                })
                 .await
             {
                 Ok(_) => (),
-                Err(_) => {
-                    error!("failed to transition to seeding");
-                    return;
+                Err(e) => {
+                    error!("failed to transition to seeding: {}", e.to_string());
                 }
-            };
+            }
         });
 
         Ok(())
@@ -193,57 +323,70 @@ impl TorrentSession {
                 None => return,
             };
 
+            session.send_event(SessionEvent::SeedStarted).await;
+
             let mut state = session.state.write().await;
+
             let Some(resources) = state.take_seeding() else {
                 return;
             };
+
             drop(state);
 
+            let resources = Arc::new(resources);
             debug!("started seeding...");
 
             loop {
                 tokio::select! {
                     biased;
                     _ = cancellation_token.cancelled() => {
-                        return;
-                    },
+                        break;
+                    }
                     message = uploader.recv() => match message {
                         None => {
-                            info!("downloader is closed");
+                            info!("uploader is closed");
                             break;
-                        },
-                        Some(PieceRequest { index, begin, length, respond }) => {
-                             match resources.handler.read_piece(index).await {
-                                Ok(data) => {
-                                    let begin = begin as usize;
-                                    let end = (begin + length as usize).min(data.len());
+                        }
+                        Some(PieceRequest { index, respond }) => {
+                            let resources = resources.clone();
 
-                                    let _ = respond.send(data[begin..end].to_vec());
+                            tokio::spawn(async move {
+                                match resources.handler.read_piece(index).await {
+                                    Ok(data) => {
+                                        let _ = respond.send(data);
+                                    }
+                                    Err(e) => warn!("failed to read piece {}: {}", index, e),
                                 }
-                                Err(e) => warn!("failed to read piece {}: {}", index, e),
-                            }
+                            });
                         }
                     }
                 }
             }
 
-            debug!("stoped seeding, state: idle");
-            session.transition_idle().await
+            session.broadcast(StandardMessage::Choke).await;
+
+            if cancellation_token.is_cancelled() {
+                return;
+            }
+
+            debug!("stopped seeding, state: idle");
+            session.transition(Transition::Pause).await.ok();
         });
 
         Ok(())
     }
-
     pub async fn send_downloaded_piece(&self, index: u32, data: Vec<u8>) {
+        self.pending_writes.fetch_add(1, Ordering::Relaxed);
+
         let state = self.state.read().await;
 
         let Some(tx) = state.downloader_tx() else {
+            self.pending_writes.fetch_sub(1, Ordering::Relaxed);
             return;
         };
 
         if tx.send((index, data)).await.is_err() {
-            warn!("failed to send to downloader, channel closed");
-            return;
+            self.pending_writes.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -279,17 +422,43 @@ impl TorrentSession {
                     None => return,
                 };
 
+                {
+                    let mut peer_state = session.peers.write().await;
+
+                    if peer_state.contains_key(&addr) {
+                        debug!(
+                            "skipping reconnect to {}, state: {:?}",
+                            addr,
+                            peer_state.get(&addr)
+                        );
+
+                        return;
+                    }
+
+                    peer_state.insert(addr, PeerState::Connecting);
+                }
+
                 let handshake_fut = session.bep_router.handshake(session.clone(), addr);
 
-                if let Ok(result) =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), handshake_fut).await
-                {
-                    match result {
-                        Ok(_) => debug!("bep handshake, connected: {}", addr),
-                        Err(e) => debug!("bep handshake, failed: {} - {}", addr, e),
-                    }
-                } else {
+                let Ok(result) = timeout(Duration::from_secs(5), handshake_fut).await else {
                     debug!("bep handshake timeout: {}", addr);
+                    session.peers.write().await.remove(&addr);
+
+                    return;
+                };
+
+                match result {
+                    Ok(_) => debug!("bep handshake, connected: {}", addr),
+                    Err(BepRouterError::ConnectionManagerError(
+                        ConnectionManagerError::SelfConnectionError(),
+                    )) => {
+                        session.peers.write().await.remove(&addr);
+                        debug!("ignoring self connection");
+                    }
+                    Err(e) => {
+                        session.peers.write().await.remove(&addr);
+                        debug!("bep handshake, failed: {} - {}", addr, e);
+                    }
                 }
             });
         }
@@ -297,19 +466,11 @@ impl TorrentSession {
 }
 
 impl TorrentSession {
-    pub fn purge(&self) {
-        self.purge_on_drop.store(true, Ordering::Relaxed);
-    }
-
     pub async fn get_pipeline(&self, src: SocketAddr) -> Option<Arc<Pipeline>> {
         let peers = self.peers.read().await;
 
         match peers.get(&src) {
             Some(PeerState::Active(p)) => Some(p.clone()),
-            Some(another) => {
-                error!("fuck, {:?}", another);
-                None
-            }
             _ => None,
         }
     }
@@ -325,44 +486,15 @@ impl TorrentSession {
         bitfield.clone()
     }
 
-    pub async fn has_block(&self, index: u32, begin: u32) -> bool {
-        let assemblers = self.assemblers.read().await;
+    pub async fn add_piece(&self, index: u32) -> bool {
+        let mut bitfield = self.bitfield.write().await;
 
-        match assemblers.get(&index) {
-            Some(a) => a.has_block(begin),
-            None => self.bitfield.read().await.have(index as usize),
-        }
-    }
-
-    pub async fn add_block(&self, index: u32, begin: u32, data: Vec<u8>) -> Option<Vec<u8>> {
-        let mut assemblers = self.assemblers.write().await;
-
-        {
-            let bitfield = self.bitfield.read().await;
-
-            if bitfield.have(index as usize) {
-                return None;
-            }
+        if bitfield.have(index as usize) {
+            return false;
         }
 
-        let assembler = assemblers
-            .entry(index)
-            .or_insert_with(|| PieceAssembler::new(index, self.piece_size(index)));
-
-        if assembler.add_block(begin, &data) {
-            let Some(piece) = assemblers.remove(&index) else {
-                return None;
-            };
-
-            {
-                let mut bitfield = self.bitfield.write().await;
-                bitfield.set(index as usize);
-            }
-
-            return Some(piece.assemble());
-        }
-
-        None
+        bitfield.set(index as usize);
+        true
     }
 
     pub async fn get_pending_peer(&self, peer: SocketAddr) -> Option<BepId> {
@@ -374,22 +506,16 @@ impl TorrentSession {
         }
     }
 
-    pub async fn check_already_active(&self, peer: SocketAddr) {
-        let mut peers = self.peers.write().await;
-
-        if matches!(peers.get(&peer), Some(PeerState::Active(..))) {
-            peers.remove(&peer);
-        }
-    }
-
     pub async fn insert_pending(&self, addr: SocketAddr, peer_id: BepId, we_initiated: bool) {
         let mut peers = self.peers.write().await;
 
-        peers.entry(addr).or_insert(PeerState::Pending {
-            peer_id,
-            initiated: Instant::now(),
-            we_initiated,
-        });
+        peers.insert(
+            addr,
+            PeerState::Pending {
+                peer_id,
+                we_initiated,
+            },
+        );
     }
 
     pub async fn insert_pipeline(&self, addr: SocketAddr, peer_id: BepId, bitfield: Vec<u8>) {
@@ -406,10 +532,6 @@ impl TorrentSession {
     pub async fn activate_peer(&self, addr: SocketAddr, pipeline: Pipeline) {
         let mut peers = self.peers.write().await;
         peers.insert(addr, PeerState::Active(Arc::new(pipeline)));
-    }
-
-    pub async fn remove_peer(&self, addr: &SocketAddr) {
-        self.peers.write().await.remove(addr);
     }
 
     pub async fn is_pending_outbound(&self, addr: &SocketAddr) -> bool {
@@ -436,8 +558,27 @@ impl TorrentSession {
         }
     }
 
+    pub async fn broadcast(&self, message: StandardMessage) {
+        let peers = self.peers.read().await;
+
+        for (addr, state) in peers.iter() {
+            if matches!(state, PeerState::Active(..)) {
+                let _ = self.bep_router.send(*addr, message.clone()).await;
+            }
+        }
+    }
+
+    pub async fn terminate_with(&self, other: &SocketAddr) {
+        let mut peers = self.peers.write().await;
+        peers.remove(other);
+    }
+
     pub async fn shutdown_peers(&self) {
-        self.peers.write().await.clear();
+        let peers = std::mem::take(&mut *self.peers.write().await);
+
+        for (addr, _) in peers {
+            self.bep_router.disconnect(&addr).await;
+        }
     }
 
     pub fn piece_size(&self, index: u32) -> u32 {

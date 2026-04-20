@@ -1,8 +1,6 @@
 use core::fmt;
 use std::{
-    env,
     fmt::{Display, Formatter},
-    io,
     path::PathBuf,
 };
 
@@ -19,11 +17,14 @@ pub type Reply = Result<Response, String>;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Request {
-    Status, //
+    Status {
+        info_hash: Option<String>,
+    },
     AddDownload {
         link: String,
     },
     AddSeed {
+        name: Option<String>,
         path: String,
         piece_length: u64,
         announce: Vec<Vec<String>>,
@@ -33,29 +34,27 @@ pub enum Request {
         comment: Option<String>,
         created_by: Option<String>,
     },
-    // Remove a torrent
+    PauseSession {
+        info_hash: String,
+    },
+    ResumeSession {
+        info_hash: String,
+    },
     RemoveTorrent {
         info_hash: String,
     },
     Torrents,
     Shutdown,
-    EventStream, // start a event stream of concorrent events
+    EventStream,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload")]
 pub enum Response {
     Handled,
-    TorrentAdded {
-        info_hash: String,
-    }, // Add Torrent Response
-    Removed {
-        info_hash: String,
-    },
-    SeedingStarted {
-        info_hash: String,
-        magnet_link: String,
-    }, // Add torrent to be seeded
+    TorrentAdded { info_hash: String },
+    SeedAdded { info_hash: String },
+    Removed { info_hash: String },
     Status(DaemonStatus),
     Torrents(Vec<Torrent>),
     Torrent(Torrent),
@@ -64,22 +63,62 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum Event {
-    DownloadStarted { info_hash: String, name: String },
-    DownloadComplete { info_hash: String },
-    SeedStarted { info_hash: String },
-    PieceDownloaded { info_hash: String, index: u32 },
-    Error { info_hash: String, message: String },
+    ExposeTorrent {
+        info_hash: String,
+        magnet: String,
+    },
+
+    SessionStateChanged {
+        info_hash: String,
+        name: String,
+        state: TorrentState,
+    },
+
+    DownloadComplted {
+        info_hash: String,
+        resource_path: String,
+    },
+
+    TorrentAdded {
+        info_hash: String,
+        name: String,
+        state: TorrentState,
+    },
+
+    TorrentRemoved {
+        info_hash: String,
+    },
+
+    Error {
+        info_hash: String,
+        message: String,
+    },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
 pub enum TorrentState {
-    Downloading,
-    Seeding,
+    #[default]
+    Pending,
+    Paused,
+    Downloading {
+        current: u32,
+        total_pieces: u32,
+        download_rate: u64,
+    },
+    Verifying {
+        verified: u32,
+        total: u32,
+    },
+    Seeding {
+        upload_rate: u64,
+        peers: u32,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Torrent {
     pub info_hash: String,
+    pub name: String,
     pub state: TorrentState,
 }
 
@@ -110,11 +149,13 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn socket_path() -> io::Result<PathBuf> {
-    env::var_os(SOCKET_PATH).map(PathBuf::from).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("{SOCKET_PATH} is not set, is the bqti daemon running?"),
-        )
-    })
+pub fn socket_path() -> PathBuf {
+    if let Some(path) = std::env::var_os(SOCKET_PATH) {
+        return PathBuf::from(path);
+    }
+
+    let instance = std::env::var("BQTI_INSTANCE").unwrap_or_else(|_| "default".into());
+    let uid = unsafe { libc::getuid() };
+
+    format!("/run/user/{uid}/bqti/{instance}.sock").into()
 }

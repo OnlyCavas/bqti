@@ -16,6 +16,12 @@ pub enum SubCommand {
     Serve {
         #[arg(value_parser = parse_addr)]
         addr: String,
+
+        #[arg(
+            long,
+            help = "disable TLS certificate verification (insecure, development only)"
+        )]
+        no_cert: bool,
     },
 
     #[command(flatten)]
@@ -25,7 +31,6 @@ pub enum SubCommand {
         #[arg(value_enum)]
         kind: CertType,
 
-        #[arg(short, long)]
         output: Option<PathBuf>,
     },
 
@@ -38,15 +43,15 @@ pub enum SubCommand {
 #[derive(Subcommand)]
 pub enum Daemon {
     Download {
-        #[arg(value_name = "TORRENT", value_hint = ValueHint::AnyPath)]
-        torrent: String,
-
-        #[arg(value_name = "OUTPUT")]
-        output: String,
+        #[command(subcommand)]
+        command: DownloadCommand,
     },
     Seed {
         #[arg(value_name = "PATH")]
         path: String,
+
+        #[arg(short = 'n', long = "name")]
+        name: Option<String>,
 
         #[arg(short = 't', long = "tracker", num_args = 1.., value_parser = parse_tier)]
         announce: Vec<Vec<String>>,
@@ -69,11 +74,34 @@ pub enum Daemon {
         #[arg(short = 'b', long = "by")]
         created_by: Option<String>,
     },
-    Remove {
+    Status {
         #[arg(value_name = "INFO_HASH", value_hint = ValueHint::AnyPath)]
+        info_hash: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DownloadCommand {
+    Add {
+        #[arg(short, long, help = "watch torrent state after adding")]
+        watch: bool,
+
+        #[arg(value_name = "TORRENT", value_hint = ValueHint::AnyPath)]
+        torrent: String,
+    },
+    Stop {
+        #[arg(value_name = "INFO_HASH")]
         info_hash: String,
     },
-    Status,
+    Pause {
+        #[arg(value_name = "INFO_HASH")]
+        info_hash: String,
+    },
+    Resume {
+        #[arg(value_name = "INFO_HASH")]
+        info_hash: String,
+    },
+    List,
 }
 
 fn parse_addr(addr: &str) -> Result<String, String> {

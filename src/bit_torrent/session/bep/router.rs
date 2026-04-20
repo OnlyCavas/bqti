@@ -1,7 +1,8 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+use futures::{StreamExt, stream::FuturesUnordered};
 use thiserror::Error;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     bit_torrent::{
@@ -13,7 +14,9 @@ use crate::{
     network::{ConnectionManager, ConnectionManagerError, Message, Peer},
     session::{
         StandardMessage, StandardMessageError,
+        bep::pipeline::BlockRequest,
         session::{PieceRequest, TorrentSession},
+        state::ActiveMode,
     },
 };
 
@@ -43,7 +46,10 @@ pub enum BepRouterError {
     NonActivePipeline(),
 }
 
-const PEER_DISCOVERY_INTERVAL: Duration = Duration::from_hours(30);
+const DHT_ANNOUNCE_INTERVAL: Duration = Duration::from_mins(30);
+const DHT_DISCOVERY_INTERVAL: Duration = Duration::from_mins(1);
+const PEX_FALLBACK_INTERVAL: Duration = Duration::from_mins(1);
+const REBOOTSTRAP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct BepRouter {
     host: BepPeer,
@@ -75,61 +81,125 @@ impl BepRouter {
         Ok(Arc::new(router))
     }
 
+    pub async fn disconnect(&self, addr: &SocketAddr) {
+        self.connection_manager.disconnect(addr).await;
+    }
+
+    pub fn subscribe_disconnects(&self) -> broadcast::Receiver<SocketAddr> {
+        self.connection_manager.subscribe_disconnects()
+    }
+
     pub fn host(&self) -> &BepPeer {
         &self.host
     }
 
+    async fn dht_bootstrap(dht: &Arc<Kademlia>, addrs: &[SocketAddr]) -> bool {
+        let mut futs: FuturesUnordered<_> = addrs
+            .iter()
+            .map(|addr| {
+                let dht = dht.clone();
+                let bootstrap = BootStrap::from_socket(*addr);
+                async move { dht.join_network(&bootstrap).await }
+            })
+            .collect();
+
+        while let Some(result) = futs.next().await {
+            if result.is_ok() {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub(crate) fn start_peer_discovery(self: &Arc<Self>, session: Arc<TorrentSession>) {
-        let weak_prt = Arc::downgrade(self);
-        let torrent_session = session.clone();
+        let weak_router = Arc::downgrade(self);
+        let weak_session = Arc::downgrade(&session);
 
         tokio::spawn(async move {
-            let info_hash = &Key::from(torrent_session.metadata.info_hash());
-            let mut interval = tokio::time::interval(PEER_DISCOVERY_INTERVAL);
+            let session = match weak_session.upgrade() {
+                Some(s) => s,
+                None => return,
+            };
 
-            if let Some(bootstrap_addrs) = torrent_session.metadata.dht_nodes() {
-                let Some(router) = weak_prt.upgrade() else {
-                    return;
+            if let Some(bootstrap_nodes) = session.metadata.dht_nodes() {
+                let router = match weak_router.upgrade() {
+                    Some(r) => r,
+                    None => return,
                 };
 
-                for addr in bootstrap_addrs {
-                    let bootstrap = BootStrap::from_socket(*addr);
-
-                    if let Ok(_) = router.kademlia_dht.join_network(&bootstrap).await {
-                        break;
-                    }
+                if !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes).await {
+                    warn!("failed to bootstrap");
                 }
+
+                drop(router);
             }
 
-            loop {
-                interval.tick().await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
 
-                let router = match weak_prt.upgrade() {
+            let info_hash = Key::from(session.metadata.info_hash());
+            let is_private = session.metadata.is_private();
+
+            let mut discovery_interval = tokio::time::interval(DHT_DISCOVERY_INTERVAL);
+            let mut announce_interval = tokio::time::interval(DHT_ANNOUNCE_INTERVAL);
+            let mut pex_interval = tokio::time::interval(PEX_FALLBACK_INTERVAL);
+            let mut rebootstrap_interval = tokio::time::interval(REBOOTSTRAP_INTERVAL);
+            let mut rebootstrap = false;
+
+            loop {
+                let router = match weak_router.upgrade() {
+                    Some(r) => r,
+                    None => return,
+                };
+
+                let session = match weak_session.upgrade() {
                     Some(s) => s,
                     None => return,
                 };
 
-                let mut possible_peers: Vec<SocketAddr> = Vec::new();
+                tokio::select! {
+                    _ = rebootstrap_interval.tick(), if rebootstrap => {
+                        let Some(bootstrap_nodes) = session.metadata.dht_nodes() else {
+                            rebootstrap = false;
+                            continue;
+                        };
 
-                match router.kademlia_dht.get_peers(info_hash).await {
-                    Ok(peers) => possible_peers.extend(peers),
-                    Err(_) => {
-                        debug!("couldn't find any peers on kademlia dht table");
+                        rebootstrap = !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes).await;
+                    },
+                    _ = discovery_interval.tick() => {
+                        let mut peers = Vec::new();
+
+                        match router.kademlia_dht.get_peers(&info_hash).await {
+                            Ok(p) => peers.extend(p),
+                            Err(_) => debug!("no peers on kademlia dht"),
+                        }
+
+                        info!("kademlia peers: {:?}", peers);
+
+                        rebootstrap = peers.is_empty();
+
+                        if !rebootstrap {
+                            session.add_discovered_peers(peers);
+                        }
+                    }
+                    _ = announce_interval.tick() => {
+                        if !matches!(session.current_mode().await, ActiveMode::Seeding) {
+                            continue;
+                        }
+
+                        match router.kademlia_dht.announce(info_hash.clone()).await {
+                            Err(e) => warn!("failed to announce: {}", e),
+                            Ok(_) => info!("announced to DHT"),
+                        }
+                    }
+                    _ = pex_interval.tick(), if !is_private => {
+                        let pex_peers = router.pex_router.get_peers(&info_hash).await;
+
+                        if !pex_peers.is_empty() {
+                            session.add_discovered_peers(pex_peers);
+                        }
                     }
                 }
-
-                let pex_peers = router.pex_router.get_peers(info_hash).await;
-                possible_peers.extend(pex_peers);
-
-                if !possible_peers.is_empty() {
-                    torrent_session.add_discovered_peers(possible_peers);
-                }
-
-                // NOTE should it announce for download?
-                match router.kademlia_dht.announce(info_hash.clone()).await {
-                    Err(e) => warn!("failed to announce: {}", e.to_string()),
-                    _ => info!("announce"),
-                };
             }
         });
     }
@@ -153,18 +223,12 @@ impl BepRouter {
             .insert_pending(peer, self.host.id.clone(), true)
             .await;
 
-        if peer == self.host.addr {
-            return Ok(());
-        }
-
         let message = StandardMessage::Handshake {
             info_hash: session.metadata.info_hash().into(),
             peer_id: self.host.id.clone(),
         };
 
-        self.send(peer, message).await?;
-
-        Ok(())
+        self.send(peer, message).await
     }
 
     pub async fn handle_request(
@@ -172,62 +236,77 @@ impl BepRouter {
         session: Arc<TorrentSession>,
         message: StandardMessage,
         source: SocketAddr,
+        reply: Option<oneshot::Sender<Vec<u8>>>,
     ) -> Result<(), BepRouterError> {
-        match message {
-            StandardMessage::Handshake {
-                info_hash: infohash_recv,
-                peer_id: peerid_recv,
-            } => {
-                self.handle_handshake(session, infohash_recv, peerid_recv, source)
+        match &message {
+            StandardMessage::Handshake { info_hash, peer_id } => {
+                self.handle_handshake(session, info_hash.clone(), peer_id.clone(), source)
                     .await
             }
-            StandardMessage::Bitfield(bitfield_recv) => {
-                self.handle_bitfield(session, bitfield_recv, source).await
+            StandardMessage::Bitfield(bf) => {
+                self.handle_bitfield(session, bf.clone(), source).await
             }
-            StandardMessage::Interested => {
+            StandardMessage::Choke => {
                 let Some(pipeline) = session.get_pipeline(source).await else {
-                    return Err(BepRouterError::NonActivePipeline());
+                    return Ok(());
                 };
 
-                pipeline.on_peer_interested();
-                self.send(source, StandardMessage::Unchoke).await
+                pipeline.on_choke().await;
+
+                Ok(())
             }
+            _ => match session.current_mode().await {
+                ActiveMode::Downloading => {
+                    self.handle_request_downloading(session, message, source)
+                        .await
+                }
+                ActiveMode::Seeding => {
+                    self.handle_request_seeding(session, message, source, reply)
+                        .await
+                }
+                ActiveMode::Idle => Ok(()),
+            },
+        }
+    }
+
+    async fn handle_request_downloading(
+        &self,
+        session: Arc<TorrentSession>,
+        message: StandardMessage,
+        source: SocketAddr,
+    ) -> Result<(), BepRouterError> {
+        match message {
             StandardMessage::Unchoke => {
                 let Some(pipeline) = session.get_pipeline(source).await else {
-                    return Err(BepRouterError::NonActivePipeline());
+                    return Ok(());
                 };
 
                 pipeline.on_unchoke();
 
-                let requests = pipeline
-                    .fill_requests(None, &session, |i| session.piece_size(i))
-                    .await;
+                let requests = pipeline.fill_requests(None, &session).await;
 
-                for request in requests {
-                    self.send(
-                        source,
-                        StandardMessage::Request {
-                            index: request.index,
-                            begin: request.begin,
-                            length: request.length,
-                        },
-                    )
-                    .await?;
+                let mut in_flight: FuturesUnordered<_> = requests
+                    .into_iter()
+                    .map(|request| self.make_request(source, request))
+                    .collect();
+
+                while let Some(result) = in_flight.next().await {
+                    match result {
+                        Ok(Some(StandardMessage::Piece { index, data })) => {
+                            let next = self
+                                .process_piece(source, session.clone(), index, data)
+                                .await?;
+
+                            for request in next {
+                                in_flight.push(self.make_request(source, request));
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e) => debug!("piece request failed: {}", e),
+                    }
                 }
 
                 Ok(())
-            }
-            StandardMessage::Request {
-                index,
-                begin,
-                length,
-            } => {
-                self.handle_piece_request(session, index, begin, length, source)
-                    .await
-            }
-
-            StandardMessage::Piece { index, begin, data } => {
-                self.handle_piece(session, index, begin, data, source).await
             }
             StandardMessage::Have { index } => {
                 let Some(pipeline) = session.get_pipeline(source).await else {
@@ -241,6 +320,53 @@ impl BepRouter {
                     self.send(source, StandardMessage::Interested).await?;
                 }
 
+                return Ok(());
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn handle_request_seeding(
+        &self,
+        session: Arc<TorrentSession>,
+        message: StandardMessage,
+        source: SocketAddr,
+        reply: Option<oneshot::Sender<Vec<u8>>>,
+    ) -> Result<(), BepRouterError> {
+        match message {
+            StandardMessage::Interested => {
+                if !matches!(session.current_mode().await, ActiveMode::Seeding) {
+                    return Ok(());
+                }
+
+                let Some(pipeline) = session.get_pipeline(source).await else {
+                    return Ok(());
+                };
+
+                pipeline.on_peer_interested();
+                pipeline.unchoke();
+
+                self.send(source, StandardMessage::Unchoke).await
+            }
+            StandardMessage::NotInterested => {
+                if let Some(pipeline) = session.get_pipeline(source).await {
+                    pipeline.on_peer_not_interested();
+                    pipeline.choke();
+                }
+
+                self.send(source, StandardMessage::Choke).await
+            }
+
+            StandardMessage::Request { index } => {
+                self.handle_piece_request(session, index, source, reply)
+                    .await
+            }
+            StandardMessage::Have { index } => {
+                let Some(pipeline) = session.get_pipeline(source).await else {
+                    return Ok(());
+                };
+
+                pipeline.set_bitfield(index as usize).await;
                 Ok(())
             }
             _ => Ok(()),
@@ -254,7 +380,9 @@ impl BepRouter {
         peerid_recv: Vec<u8>,
         source: SocketAddr,
     ) -> Result<(), BepRouterError> {
-        session.check_already_active(source).await;
+        if session.get_pipeline(source).await.is_some() {
+            return Ok(());
+        }
 
         let infohash_recv =
             InfoHash::try_from(infohash_recv).map_err(|_| BepRouterError::HandleFailed())?;
@@ -295,7 +423,6 @@ impl BepRouter {
         let self_init = session.is_pending_outbound(&source).await;
 
         let Some(peer_id) = session.get_pending_peer(source).await else {
-            warn!("bitfield from unknown peer {}, dropping", source);
             return Ok(());
         };
 
@@ -310,95 +437,107 @@ impl BepRouter {
             self.send(source, StandardMessage::Bitfield(bits)).await?;
         }
 
-        let session_bitfield = session.get_bitfield().await;
+        if !matches!(session.current_mode().await, ActiveMode::Downloading) {
+            return Ok(());
+        }
+
         let Some(pipeline) = session.get_pipeline(source).await else {
-            return Err(BepRouterError::HandleFailed());
+            return Ok(());
         };
 
-        if pipeline.evaluate_interest(&session_bitfield).await {
+        let bitfield = session.get_bitfield().await;
+
+        if pipeline.evaluate_interest(&bitfield).await {
             self.send(source, StandardMessage::Interested).await?;
         }
 
         Ok(())
     }
 
-    async fn handle_piece(
+    fn make_request(
         &self,
-        session: Arc<TorrentSession>,
-        index: u32,
-        begin: u32,
-        data: Vec<u8>,
         source: SocketAddr,
-    ) -> Result<(), BepRouterError> {
-        let session_bitfield = session.get_bitfield().await;
+        request: BlockRequest,
+    ) -> impl std::future::Future<Output = Result<Option<StandardMessage>, BepRouterError>> {
+        let connection_manager = self.connection_manager.clone();
 
-        if session_bitfield.is_complete() {
-            return Ok(());
-        }
+        async move {
+            let message = Message::try_from(StandardMessage::Request {
+                index: request.index,
+            })?;
 
-        let pipeline = match session.get_pipeline(source).await {
-            Some(p) => p,
-            None => return Ok(()),
-        };
+            let data = connection_manager
+                .request(&Peer::from_socket(source), message)
+                .await?;
 
-        let complete = session.add_block(index, begin, data).await;
-
-        if let Some(piece_data) = complete {
-            pipeline.clear_piece(index).await;
-            session.send_downloaded_piece(index, piece_data).await;
-
-            debug!(
-                "piece {} complete, have {}/{}",
-                index,
-                session_bitfield.count(),
-                session_bitfield.piece_count
-            );
-
-            session.broadcast_have(index).await;
-
-            if session_bitfield.is_complete() {
-                debug!("torrent complete, disconnecting all peers");
-                session.shutdown_peers().await;
+            if data.is_empty() {
+                return Ok(None);
             }
 
-            pipeline.clear_piece(index).await;
+            let response = StandardMessage::Piece {
+                index: request.index,
+                data,
+            };
+
+            Ok(Some(response))
+        }
+    }
+
+    async fn process_piece(
+        &self,
+        source: SocketAddr,
+        session: Arc<TorrentSession>,
+        index: u32,
+        data: Vec<u8>,
+    ) -> Result<Vec<BlockRequest>, BepRouterError> {
+        let pipeline = match session.get_pipeline(source).await {
+            Some(p) => p,
+            None => return Ok(vec![]),
+        };
+
+        if !session.add_piece(index).await {
+            return Ok(pipeline.fill_requests(None, &session).await);
         }
 
-        let requests = pipeline
-            .fill_requests(Some((index, begin)), &session, |i| session.piece_size(i))
-            .await;
+        pipeline.clear_piece(index).await;
+        session.send_downloaded_piece(index, data).await;
 
-        for request in requests {
-            self.send(
-                source,
-                StandardMessage::Request {
-                    index: request.index,
-                    begin: request.begin,
-                    length: request.length,
-                },
-            )
-            .await?;
+        let session_bitfield = session.get_bitfield().await;
+
+        debug!(
+            "piece {} complete, have {}/{}",
+            index,
+            session_bitfield.count(),
+            session_bitfield.piece_count
+        );
+
+        session.broadcast_have(index).await;
+
+        if session_bitfield.is_complete() {
+            return Ok(vec![]);
         }
 
-        Ok(())
+        Ok(pipeline.fill_requests(Some(index), &session).await)
     }
 
     async fn handle_piece_request(
         &self,
         session: Arc<TorrentSession>,
         index: u32,
-        begin: u32,
-        length: u32,
         source: SocketAddr,
+        reply: Option<oneshot::Sender<Vec<u8>>>,
     ) -> Result<(), BepRouterError> {
+        let Some(pipeline) = session.get_pipeline(source).await else {
+            return Ok(());
+        };
+
+        if pipeline.we_are_choking() {
+            return Ok(());
+        }
+
         let session_bitfield = session.get_bitfield().await;
 
         if !session_bitfield.have(index as usize) {
-            warn!(
-                "peer {} requested piece {}, but i don't provide it",
-                source, index
-            );
-
             return Ok(());
         }
 
@@ -407,18 +546,17 @@ impl BepRouter {
         session
             .send_piece_request(PieceRequest {
                 index,
-                begin,
-                length,
                 respond: respond_tx,
             })
             .await;
 
-        let data = respond_rx
-            .await
-            .map_err(|_| BepRouterError::HandleFailed())?;
+        tokio::spawn(async move {
+            let Ok(data) = respond_rx.await else { return };
 
-        self.send(source, StandardMessage::Piece { index, begin, data })
-            .await?;
+            if let Some(tx) = reply {
+                let _ = tx.send(data);
+            }
+        });
 
         Ok(())
     }

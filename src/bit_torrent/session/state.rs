@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tokio::{io, sync::mpsc};
 use tokio_util::sync::CancellationToken;
@@ -6,58 +9,57 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     bit_torrent::chunks::{Downloading, MultiFileHandler, Reader, Seeding},
     hasher::Sha1Hash,
-    save,
     session::{
         BitField, TorrentSessionError,
+        cache::{CachingMode, SessionCache},
+        manager::SessionEvent,
         resume::ResumeFile,
         session::{PieceRequest, TorrentSession},
+        transition::Transition,
     },
-    torrent::metainfo::{InfoHash, Metainfo, TorrentFile},
-    utils,
+    torrent::metainfo::{Metainfo, TorrentFile},
 };
 
 pub struct StateResources<Mode> {
-    root: PathBuf,
-    info_hash: InfoHash,
-    pub handler: MultiFileHandler<Mode>,
+    pub(crate) handler: Arc<MultiFileHandler<Mode>>,
+    cache: SessionCache,
 }
 
 impl<Mode> StateResources<Mode> {
-    pub fn get_concrete_path(&self) -> PathBuf {
-        self.root.clone()
-    }
-
-    pub async fn get_resume(&self) -> Option<ResumeFile> {
-        let root = self.get_concrete_path();
-        ResumeFile::open(&root, &self.info_hash).await
-    }
-
     pub async fn persist_resume(&self, session: &TorrentSession) {
         let snapshot = session.get_bitfield().await;
-        let data = ResumeFile::new(&self.info_hash, snapshot, &self.root);
+        self.cache.persist_resume(snapshot).await;
+    }
 
-        if let Err(e) = data.persist(&self.root).await {
-            warn!("failed to persist resume data: {}", e);
-        }
+    pub fn get_resume(&self) -> Option<&ResumeFile> {
+        self.cache.resume.as_ref()
+    }
+
+    pub fn get_root_path(&self) -> &Path {
+        &self.cache.dir
     }
 }
 
 impl StateResources<Downloading> {
-    pub async fn download(metafile: &TorrentFile) -> Result<Self, TorrentSessionError> {
+    pub async fn download(metafile: Arc<TorrentFile>) -> Result<Self, TorrentSessionError> {
         let piece_length = metafile.piece_length();
         let files = metafile.files();
-        let info_hash = metafile.info_hash();
 
-        let Some(bqti_path) = utils::bqti::downloads_dir(info_hash.to_string()) else {
-            return Err(TorrentSessionError::UnableToFindXDGFolder());
+        let cache = match SessionCache::new(CachingMode::Download {
+            metafile: metafile.clone(),
+        })
+        .await
+        {
+            Some(cache) => cache,
+            None => return Err(TorrentSessionError::UnableToFindXDGFolder()),
         };
 
-        let handler = MultiFileHandler::download(&bqti_path, piece_length, files).await?;
+        let handler = MultiFileHandler::download(&cache.dir, piece_length, files).await?;
+        cache.persist_torrent().await;
 
         let state = Self {
-            root: bqti_path,
-            info_hash: info_hash.clone(),
-            handler,
+            handler: Arc::new(handler),
+            cache,
         };
 
         Ok(state)
@@ -67,66 +69,66 @@ impl StateResources<Downloading> {
 impl StateResources<Seeding> {
     pub async fn seed(
         user_space: PathBuf,
-        metafile: &TorrentFile,
+        metafile: Arc<TorrentFile>,
+        event_tx: &mpsc::Sender<SessionEvent>,
     ) -> Result<(Self, BitField), TorrentSessionError> {
         let piece_length = metafile.piece_length();
         let files = metafile.files();
-        let info_hash = metafile.info_hash();
 
-        let Some(uploads) = &utils::bqti::uploads_dir(&user_space, &metafile) else {
-            return Err(TorrentSessionError::UnableToFindXDGFolder());
+        let cache = match SessionCache::new(CachingMode::Seed {
+            user_space,
+            metafile: metafile.clone(),
+        })
+        .await
+        {
+            Some(cache) => cache,
+            None => return Err(TorrentSessionError::UnableToFindXDGFolder()),
         };
 
-        let handler = MultiFileHandler::seed(&uploads, piece_length, files).await?;
-        let resume = ResumeFile::open(&uploads, metafile.info_hash()).await;
-        let seed_metadata_path = uploads.join(".torrent");
+        let handler = Arc::new(MultiFileHandler::seed(&cache.dir, piece_length, files).await?);
+        cache.persist_torrent().await;
 
-        if !seed_metadata_path.exists() {
-            match save(seed_metadata_path, &metafile) {
-                Ok(_) => debug!("persist {} .torrent", metafile.info_hash().to_string()),
-                Err(_) => error!("failed to persist .torrent"),
-            }
-        }
-
-        let bitfield = match resume {
-            Some(r) if r.is_complete() => r.get_bitfield(),
+        let bitfield = match &cache.resume {
+            Some(resume) if resume.is_complete() => resume.get_bitfield(),
             _ => {
-                let verified = Self::verify_pieces(&handler, &metafile.piece_hashes()).await?;
+                let verified =
+                    Self::verify_pieces(&handler, &metafile.piece_hashes(), &event_tx).await?;
 
-                let data = ResumeFile::new(info_hash, verified.clone(), &uploads);
-
-                if let Err(e) = data.persist(&uploads).await {
-                    warn!("Failed to persist resume: {}", e);
-                }
+                cache.persist_resume(verified.clone()).await;
 
                 verified
             }
         };
 
-        let state = Self {
-            root: uploads.clone(),
-            info_hash: metafile.info_hash().clone(),
-            handler,
-        };
-
-        Ok((state, bitfield))
+        Ok((Self { handler, cache }, bitfield))
     }
 
     async fn verify_pieces(
         handler: &MultiFileHandler<Seeding>,
         piece_hashes: &[Vec<u8>],
+        event_tx: &mpsc::Sender<SessionEvent>,
     ) -> Result<BitField, TorrentSessionError> {
-        let mut bitfield = BitField::empty(piece_hashes.len());
+        let total_pieces = piece_hashes.len();
+        let mut bitfield = BitField::empty(total_pieces);
 
         for (index, expected) in piece_hashes.iter().enumerate() {
             let data = handler.read_piece(index as u32).await?;
             let piece_hash = *Sha1Hash::digest(&data).as_bytes();
 
-            if piece_hash.as_slice() == expected.as_slice() {
-                bitfield.set(index);
-                info!("piece {} verified", index);
-            } else {
-                warn!("piece {} corrupted or missing", index);
+            if piece_hash.as_slice() != expected.as_slice() {
+                continue;
+            }
+
+            bitfield.set(index);
+
+            if let Err(_) = event_tx
+                .send(SessionEvent::PieceVerified {
+                    total_pieces: total_pieces as u32,
+                    current: index as u32,
+                })
+                .await
+            {
+                warn!("failed to send verifying piece event");
             }
         }
 
@@ -134,8 +136,14 @@ impl StateResources<Seeding> {
     }
 }
 
+#[derive(Clone)]
+pub enum LastState {
+    Downloading,
+    Seeding { path: PathBuf },
+}
+
 pub enum TorrentState {
-    Idle,
+    Idle(Option<LastState>),
     Downloading {
         path: PathBuf,
         resources: Option<StateResources<Downloading>>,
@@ -151,12 +159,54 @@ pub enum TorrentState {
     Cancelled,
 }
 
+#[derive(Debug)]
+pub enum ActiveMode {
+    Downloading,
+    Seeding,
+    Idle,
+}
+
+impl Default for TorrentState {
+    fn default() -> Self {
+        TorrentState::Idle(None)
+    }
+}
+
+impl TorrentSession {
+    pub async fn current_mode(&self) -> ActiveMode {
+        match &*self.state.read().await {
+            TorrentState::Downloading { .. } => ActiveMode::Downloading,
+            TorrentState::Seeding { .. } => ActiveMode::Seeding,
+            _ => ActiveMode::Idle,
+        }
+    }
+}
+
 impl TorrentState {
-    pub fn cancel_inner(&self) {
+    pub(crate) fn cancel_inner(&mut self) {
         match self {
-            Self::Downloading { token, .. } => token.cancel(),
-            Self::Seeding { token, .. } => token.cancel(),
+            Self::Downloading { token, .. } => {
+                token.cancel();
+            }
+            Self::Seeding { token, .. } => {
+                token.cancel();
+            }
             _ => {}
+        }
+    }
+
+    pub fn can_transition_to(&self, to: &Transition) -> bool {
+        match (self, to) {
+            (TorrentState::Idle(None), Transition::Download { .. })
+            | (TorrentState::Idle(None), Transition::Seed { .. })
+            | (TorrentState::Downloading { .. }, Transition::Pause)
+            | (TorrentState::Downloading { .. }, Transition::Cancel)
+            | (TorrentState::Downloading { .. }, Transition::Seed { .. })
+            | (TorrentState::Seeding { .. }, Transition::Pause)
+            | (TorrentState::Seeding { .. }, Transition::Cancel)
+            | (TorrentState::Idle(Some(_)), Transition::Resume { .. })
+            | (TorrentState::Idle(Some(_)), Transition::Cancel) => true,
+            _ => false,
         }
     }
 

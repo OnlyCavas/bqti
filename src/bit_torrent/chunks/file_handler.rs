@@ -70,8 +70,6 @@ impl MultiFileHandler<Seeding> {
                 base_path.join(embedded.to_path())
             };
 
-            debug!("loading: {}", full_path.to_string_lossy());
-
             let file = File::open(&full_path)?;
             let length = file.metadata()?.len();
 
@@ -213,28 +211,67 @@ impl Writer for MultiFileHandler<Downloading> {
 
         let data = Arc::new(data);
 
-        for target in &self.targets {
-            let Some(overlap) =
-                Self::piece_overlap(target.start_byte, target.length, piece_start, piece_end)
-            else {
-                continue;
-            };
+        let tasks: Vec<_> = self
+            .targets
+            .iter()
+            .filter_map(|target| {
+                let overlap =
+                    Self::piece_overlap(target.start_byte, target.length, piece_start, piece_end)?;
 
-            let handle = target.handle.clone();
-            let data = data.clone();
+                let handle = target.handle.clone();
+                let data = data.clone();
 
-            tokio::task::spawn_blocking(move || {
-                handle.write_at(
-                    &data[overlap.buffer_offset..overlap.buffer_offset + overlap.size],
-                    overlap.file_offset,
-                )?;
-
-                Ok::<(), io::Error>(())
+                Some(tokio::task::spawn_blocking(move || {
+                    handle.write_at(
+                        &data[overlap.buffer_offset..overlap.buffer_offset + overlap.size],
+                        overlap.file_offset,
+                    )?;
+                    Ok::<(), io::Error>(())
+                }))
             })
-            .await
-            .map_err(|_| ChunkHandlerError::ThreadFailed())??;
+            .collect();
+
+        // all file writes in parallel
+        for task in tasks {
+            task.await
+                .map_err(|_| ChunkHandlerError::ThreadFailed())??;
         }
 
         Ok(())
     }
+
+    // async fn write_piece(&self, index: u32, data: Vec<u8>) -> Result<(), ChunkHandlerError> {
+    //     let piece_start = index as Size * self.piece_length;
+    //     let piece_end = piece_start + data.len() as u64;
+    //
+    //     if piece_start >= self.total_length {
+    //         return Err(ChunkHandlerError::OutOfBounds(index));
+    //     }
+    //
+    //     let data = Arc::new(data);
+    //
+    //     for target in &self.targets {
+    //         let Some(overlap) =
+    //             Self::piece_overlap(target.start_byte, target.length, piece_start, piece_end)
+    //         else {
+    //             continue;
+    //         };
+    //
+    //         let handle = target.handle.clone();
+    //         let data = data.clone();
+    //
+    //         tokio::task::spawn_blocking(move || {
+    //             handle.write_at(
+    //                 &data[overlap.buffer_offset..overlap.buffer_offset + overlap.size],
+    //                 overlap.file_offset,
+    //             )?;
+    //
+    //             Ok::<(), io::Error>(())
+    //         })
+    //         .await
+    //         .map_err(|_| ChunkHandlerError::ThreadFailed())??;
+    //     }
+    //
+    //     Ok(())
+    // }
 }

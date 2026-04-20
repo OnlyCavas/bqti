@@ -8,9 +8,10 @@ use crate::{
     utils::bqti::fetch_current_timestamp,
 };
 
-pub const PRUNE_CHECK_DURATION: Duration = Duration::from_secs(300);
+pub const PRUNE_CHECK_DURATION: Duration = Duration::from_mins(5);
+
 const MAX_STORE_ENTRIES: usize = 10_000;
-const DEFAULT_TTL: UnixDate = 24 * 3600;
+const DEFAULT_TTL: UnixDate = 35 * 60;
 
 #[derive(Debug, Clone)]
 struct StoreValue {

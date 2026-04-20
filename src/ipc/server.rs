@@ -1,18 +1,23 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
-use bqti_ipc::{Event, Reply, Request, Response, socket_path, state::IpcState};
+use bqti_ipc::{
+    Event, Reply, Request, Response, TorrentState, socket_path,
+    state::{EventStream, IpcState},
+};
+
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     sync::{RwLock, broadcast, oneshot},
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     SeedingOptions, TorrentAction, TorrentSource, Torrenting,
     session::SessionMode,
-    torrent::metainfo::{InfoHash, Magnet, Metainfo},
+    torrent::metainfo::{InfoHash, Metainfo},
 };
 
 const EVENT_STREAM_BUFFER_SIZE: usize = 64;
@@ -34,18 +39,39 @@ pub enum IpcCommand {
 
 struct ClientCtx {
     event_tx: broadcast::Sender<Event>,
-    state: Arc<RwLock<IpcState>>,
     bqti: TorrentingHandle,
+    state: Arc<RwLock<IpcState>>,
+    cancellation_token: CancellationToken,
+}
+
+impl ClientCtx {
+    async fn emit(&self, event: Event) {
+        let event = {
+            let mut state = self.state.write().await;
+            state.apply(event)
+        };
+
+        if let Some(event) = event {
+            let _ = self.event_tx.send(event);
+        }
+    }
 }
 
 pub struct IpcServer {
     socket_path: PathBuf,
     event_tx: broadcast::Sender<Event>,
+    state: Arc<RwLock<IpcState>>,
 }
 
 impl IpcServer {
-    pub async fn start(bqti: TorrentingHandle) -> anyhow::Result<(Self, Arc<RwLock<IpcState>>)> {
-        let path = socket_path().context("failed to get socket path")?;
+    pub async fn start(bqti: TorrentingHandle) -> anyhow::Result<Arc<Self>> {
+        let path = socket_path();
+        let cancellation_token = CancellationToken::new();
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).context("failed to create socket directory")?;
+        }
+
         let _ = fs::remove_file(&path);
 
         let listener = UnixListener::bind(&path).context("failed to bind socket")?;
@@ -63,21 +89,29 @@ impl IpcServer {
             event_tx: event_tx.clone(),
             state: state.clone(),
             bqti,
+            cancellation_token: cancellation_token.clone(),
         });
 
-        tokio::spawn(accept_loop(listener, ctx));
+        tokio::spawn(accept_loop(listener, ctx, cancellation_token));
 
-        Ok((
-            Self {
-                socket_path: path,
-                event_tx,
-            },
+        let ipc_server = Arc::new(Self {
+            socket_path: path,
+            event_tx,
             state,
-        ))
+        });
+
+        Ok(ipc_server)
     }
 
-    pub fn send_event(&self, event: Event) {
-        let _ = self.event_tx.send(event);
+    pub async fn send_event(&self, event: Event) {
+        let event = {
+            let mut state = self.state.write().await;
+            state.apply(event)
+        };
+
+        if let Some(event) = event {
+            let _ = self.event_tx.send(event);
+        }
     }
 }
 
@@ -88,22 +122,33 @@ impl Drop for IpcServer {
     }
 }
 
-async fn accept_loop(listener: UnixListener, ctx: Arc<ClientCtx>) {
+async fn accept_loop(
+    listener: UnixListener,
+    ctx: Arc<ClientCtx>,
+    cancellation_token: CancellationToken,
+) {
     loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                debug!("new IPC client connected");
-                let ctx = ctx.clone();
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {
 
-                tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, ctx).await {
-                        warn!("IPC client error: {e}");
+            },
+            stream = listener.accept() => {
+                match stream {
+                    Ok((stream, _)) => {
+                        debug!("new IPC client connected");
+                        let ctx = ctx.clone();
+
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_client(stream, ctx).await {
+                                warn!("IPC client error: {e}");
+                            }
+                        });
                     }
-                });
-            }
-            Err(e) => {
-                error!("IPC accept error: {e}");
-                break;
+                    Err(e) => {
+                        error!("IPC accept error: {e}");
+                        break;
+                    }
+                }
             }
         }
     }
@@ -139,7 +184,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<ClientCtx>) -> anyhow::Resul
             .context("error writing reply")?;
 
         if !is_event_stream {
-            continue;
+            return Ok(());
         }
 
         debug!("client upgrading to event stream");
@@ -149,16 +194,27 @@ async fn handle_client(stream: UnixStream, ctx: Arc<ClientCtx>) -> anyhow::Resul
     }
 }
 
-// TODO: test event streams
 async fn handle_event_stream(
     write: &mut tokio::net::unix::OwnedWriteHalf,
     ctx: &ClientCtx,
 ) -> anyhow::Result<()> {
     let mut rx = ctx.event_tx.subscribe();
 
-    // TODO: send currentipc server state snapshot here
-    // let snapshot = ctx.state.read().unwrap();
-    // for event in snapshot.replicate() { ... }
+    {
+        let state = ctx.state.read().await;
+
+        for event in state.replicate() {
+            let mut line =
+                serde_json::to_string(&event).context("error serializing snapshot event")?;
+
+            line.push('\n');
+
+            write
+                .write_all(line.as_bytes())
+                .await
+                .context("error writing snapshot")?;
+        }
+    }
 
     loop {
         match rx.recv().await {
@@ -196,7 +252,7 @@ async fn handle_event_stream(
 
 async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
     match request {
-        Request::Status => Ok(Response::Status(bqti_ipc::DaemonStatus {
+        Request::Status { info_hash: _ } => Ok(Response::Status(bqti_ipc::DaemonStatus {
             version: env!("CARGO_PKG_VERSION").to_string(),
             active_torrents: 0,
             upload_rate: 0,
@@ -211,9 +267,16 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok(Response::TorrentAdded {
-                info_hash: torrent_file.info_hash().to_string(),
+            let info_hash = torrent_file.info_hash().to_string();
+
+            ctx.emit(Event::TorrentAdded {
+                info_hash: info_hash.clone(),
+                name: torrent_file.name().to_string(),
+                state: TorrentState::Pending,
             })
+            .await;
+
+            Ok(Response::TorrentAdded { info_hash })
         }
         Request::AddSeed {
             path,
@@ -224,8 +287,9 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
             private,
             comment,
             created_by,
+            name,
         } => {
-            let torrent = ctx
+            let torrent_file = ctx
                 .bqti
                 .add_torrent(TorrentAction::Seed {
                     options: SeedingOptions {
@@ -237,15 +301,22 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
                         private,
                         comment,
                         created_by,
+                        name,
                     },
                 })
                 .await
                 .map_err(|e| e.to_string())?;
 
-            Ok(Response::SeedingStarted {
-                info_hash: torrent.info_hash().to_string(),
-                magnet_link: torrent.magnet().to_string(),
+            let info_hash = torrent_file.info_hash().to_string();
+
+            ctx.emit(Event::TorrentAdded {
+                info_hash: info_hash.clone(),
+                name: torrent_file.name().to_string(),
+                state: TorrentState::Pending,
             })
+            .await;
+
+            Ok(Response::SeedAdded { info_hash })
         }
         Request::RemoveTorrent { info_hash } => {
             let info_hash = InfoHash::from_hex(&info_hash).ok_or("info hash invalid")?;
@@ -256,10 +327,46 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
                 .await
                 .map_err(|e| e.to_string())?;
 
+            ctx.emit(Event::TorrentRemoved {
+                info_hash: info_hash.to_string(),
+            })
+            .await;
+
             Ok(Response::Removed {
                 info_hash: info_hash.to_string(),
             })
         }
+
+        Request::ResumeSession { info_hash } => {
+            let info_hash = InfoHash::from_hex(&info_hash).ok_or("info hash invalid")?;
+
+            ctx.bqti
+                .resume_torrent(info_hash)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Response::Handled)
+        }
+
+        Request::PauseSession { info_hash } => {
+            let info_hash = InfoHash::from_hex(&info_hash).ok_or("info hash invalid")?;
+            let hash = info_hash.to_string();
+
+            ctx.bqti
+                .pause_torrent(info_hash)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            ctx.emit(Event::SessionStateChanged {
+                info_hash: hash,
+                name: "".into(),
+                state: TorrentState::Paused,
+            })
+            .await;
+
+            Ok(Response::Handled)
+        }
+
         Request::Torrents => {
             let current_torrents = {
                 let state = ctx.state.read().await;
@@ -268,12 +375,13 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
 
             Ok(Response::Torrents(current_torrents))
         }
-        Request::EventStream => Ok(Response::Handled),
 
-        // FIX maybe pass a cancellation token? on bqti to terminate process
         Request::Shutdown => {
             info!("shutdown requested via IPC");
-            std::process::exit(0);
+            ctx.cancellation_token.cancel();
+            Ok(Response::Handled)
         }
+
+        Request::EventStream => Ok(Response::Handled),
     }
 }

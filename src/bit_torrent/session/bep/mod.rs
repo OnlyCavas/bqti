@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::time::Instant;
 
 mod message;
 mod pipeline;
@@ -11,10 +10,7 @@ pub use router::{BepRouter, BepRouterError};
 
 #[derive(Debug)]
 pub(crate) enum PeerState {
-    Pending {
-        peer_id: BepId,
-        initiated: Instant,
-        we_initiated: bool,
-    },
+    Connecting,
+    Pending { peer_id: BepId, we_initiated: bool },
     Active(Arc<Pipeline>),
 }

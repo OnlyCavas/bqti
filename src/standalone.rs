@@ -13,7 +13,7 @@ use crate::{
     utils::{
         self,
         bqti::certs_dir,
-        certs::{make_ca_root, store_cert},
+        certs::{CertOptions, make_ca_root, store_cert},
     },
 };
 
@@ -157,23 +157,29 @@ fn validate(torrent: PathBuf) -> Result<()> {
     }
 }
 
-// FIXME handle the output
-pub async fn handle_certs(kind: CertType, _output: Option<PathBuf>) -> Result<()> {
+pub async fn handle_certs(kind: CertType, output: Option<PathBuf>) -> Result<()> {
+    let dir = match output {
+        Some(ref path) => PathBuf::from(path),
+        None => certs_dir().context("cannot determine certs directory")?,
+    };
+
     let ca_root = make_ca_root().await?;
-    let dir = certs_dir().context("cannot determine certs directory")?;
 
     match kind {
         CertType::Root => {
-            info!("done, at {}", dir.display());
+            store_cert(&ca_root, "ca.der", "ca_pk.der", &CertOptions::new(&dir)).await?;
 
-            Ok(())
+            utils::console::print_certs(&kind, &dir, &ca_root, None);
         }
         CertType::Leaf => {
-            let leaf_cert = ca_root.leaf("localhost", true)?;
-            store_cert(&leaf_cert, "quic.der", "quic_pk.der").await?;
-            info!("done, at {}", dir.display());
+            let leaf = ca_root.leaf("localhost", true)?;
 
-            Ok(())
+            store_cert(&ca_root, "ca.der", "ca_pk.der", &CertOptions::new(&dir)).await?;
+            store_cert(&leaf, "quic.der", "quic_pk.der", &CertOptions::new(&dir)).await?;
+
+            utils::console::print_certs(&kind, &dir, &ca_root, Some(&leaf));
         }
     }
+
+    Ok(())
 }

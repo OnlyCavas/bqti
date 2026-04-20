@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use anyhow::Context;
 
 use crate::{
     Bqti,
@@ -6,7 +6,7 @@ use crate::{
     utils,
 };
 
-pub async fn handle_serve(addr: String) -> anyhow::Result<()> {
+pub async fn handle_serve(addr: String, no_cert: bool) -> anyhow::Result<()> {
     let my_self = Peer::new("localhost", &addr)?;
     let ca_root = utils::certs::make_ca_root().await?;
 
@@ -19,9 +19,18 @@ pub async fn handle_serve(addr: String) -> anyhow::Result<()> {
         leaf_quic.key_der(),
     );
 
-    let (manager, stream_rx) = ConnectionManager::new(endpoint_config, ManagerOptions::default())?;
+    let endpoint = match no_cert {
+        true => {
+            warn!("TLS certificate verification disabled — do not use in production");
+            endpoint_config.dangerous_no_cert_verify().build()
+        }
+        false => endpoint_config.build(),
+    }
+    .context("failed to build quic configuration")?;
 
-    let bit_torrent = Bqti::new(Arc::new(manager), leaf_kademlia)?;
+    let (manager, stream_rx) = ConnectionManager::new(endpoint, ManagerOptions::default())?;
+
+    let bit_torrent = Bqti::new(manager, leaf_kademlia)?;
     bit_torrent.serve_forever(stream_rx).await?;
 
     Ok(())

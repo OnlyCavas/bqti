@@ -18,7 +18,10 @@ use crate::{
     ipc::server::{IpcCommandError, IpcServer},
     load,
     network::{ConnectionManager, Message, Packet},
-    session::{BepRouter, SessionManager, SessionMode, StandardMessage, TorrentSessionError},
+    session::{
+        BepRouter, SessionManager, SessionManagerError, SessionMode, StandardMessage,
+        TorrentSessionError,
+    },
     torrent::{
         builder::TorrentBuilder,
         metainfo::{InfoHash, Integrity, TorrentFile},
@@ -29,6 +32,9 @@ use crate::{
 pub enum BqtiTorretingError {
     #[error(transparent)]
     TorrentSessionError(#[from] TorrentSessionError),
+
+    #[error(transparent)]
+    SessionManagerError(#[from] SessionManagerError),
 
     #[error(transparent)]
     BitTorrentError(#[from] BitTorrentError),
@@ -56,6 +62,7 @@ pub struct Bqti {
 
 pub struct SeedingOptions {
     pub path: PathBuf,
+    pub name: Option<String>,
     pub piece_length: u64,
     pub announce: Vec<Vec<String>>,
     pub seeds: Option<Vec<String>>,
@@ -89,35 +96,39 @@ impl TorrentSource {
 
 #[async_trait]
 pub trait Torrenting {
-    async fn add_torrent(&self, action: TorrentAction) -> Result<TorrentFile, BqtiTorretingError>;
+    async fn add_torrent(
+        &self,
+        action: TorrentAction,
+    ) -> Result<Arc<TorrentFile>, BqtiTorretingError>;
+
     async fn remove_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError>;
+    async fn pause_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError>;
+    async fn resume_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError>;
 }
 
 #[async_trait]
 impl Torrenting for Bqti {
-    async fn add_torrent(&self, action: TorrentAction) -> Result<TorrentFile, BqtiTorretingError> {
+    async fn add_torrent(
+        &self,
+        action: TorrentAction,
+    ) -> Result<Arc<TorrentFile>, BqtiTorretingError> {
         let (torrent_file, mode) = match action {
             TorrentAction::Download { source } => {
                 let torrent = match source {
-                    TorrentSource::TorrentFile(torrent_path) => load(torrent_path)?,
+                    TorrentSource::TorrentFile(torrent_path) => load(&torrent_path)?,
                     TorrentSource::MagnetLink(_) => {
                         return Err(BqtiTorretingError::Unsupported("magnet links".into()));
                     }
                 };
 
-                (
-                    torrent,
-                    SessionMode::Download {
-                        target_dir: "may be error here".into(),
-                    },
-                )
+                (torrent, SessionMode::Download)
             }
 
             TorrentAction::Seed { options } => {
                 let file_name = options
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
+                    .name
+                    .as_deref()
+                    .or_else(|| options.path.file_name().and_then(|n| n.to_str()))
                     .ok_or(BqtiTorretingError::FailedToLoad())?;
 
                 let torrent =
@@ -140,14 +151,28 @@ impl Torrenting for Bqti {
             }
         };
 
+        let torrent_file = Arc::new(torrent_file);
         torrent_file.validate()?;
-        self.torrenting_session.add(mode, &torrent_file).await;
+
+        self.torrenting_session
+            .add(mode, torrent_file.clone())
+            .await?;
 
         Ok(torrent_file)
     }
 
     async fn remove_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError> {
         self.torrenting_session.remove(&info_hash).await;
+        Ok(info_hash)
+    }
+
+    async fn pause_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError> {
+        self.torrenting_session.pause(&info_hash).await?;
+        Ok(info_hash)
+    }
+
+    async fn resume_torrent(&self, info_hash: InfoHash) -> Result<InfoHash, BqtiTorretingError> {
+        self.torrenting_session.resume(&info_hash).await?;
         Ok(info_hash)
     }
 }
@@ -171,14 +196,14 @@ impl Bqti {
             pex_router.clone(),
         )?;
 
-        let manager = Arc::new(SessionManager::new(bep_router));
+        let torrenting_session = Arc::new(SessionManager::new(bep_router));
 
         let bqti = Arc::new(Self {
             kademlia,
             pex: pex_router,
             connection_manager,
             rpc_handler,
-            torrenting_session: manager,
+            torrenting_session,
         });
 
         Ok(bqti)
@@ -191,25 +216,38 @@ impl Bqti {
         let mut join_set = tokio::task::JoinSet::new();
         let cancellation_token = CancellationToken::new();
 
-        let manager = self.connection_manager.clone();
-        let cancel_tx = cancellation_token.clone();
-
-        // FIX: is missing passing thru the state
-        let (ipc_server, _ipc_state) = IpcServer::start(self.clone())
+        let ipc_server = IpcServer::start(self.clone())
             .await
-            .context("failed to start")?;
+            .context("ipc server failed to start")?;
 
-        join_set.spawn(async move {
-            manager.start_listening(cancel_tx).await;
-        });
+        {
+            let manager = self.connection_manager.clone();
+            let cancel_tx = cancellation_token.clone();
+
+            join_set.spawn(async move {
+                manager.start_listening(cancel_tx).await;
+            });
+        }
+
+        {
+            let mut ipc_recv = self.torrenting_session.subscribe();
+            let ipc_server = ipc_server.clone();
+
+            join_set.spawn(async move {
+                while let Ok(event) = ipc_recv.recv().await {
+                    ipc_server.send_event(event).await;
+                }
+            });
+        }
 
         loop {
             tokio::select! {
-                Some(Packet(message, source_addr)) = stream_rx.recv() => {
+                Some(mut incoming_packet) = stream_rx.recv() => {
                     let bqti = Arc::clone(&self);
+                    let reply = incoming_packet.take_reply();
 
                     join_set.spawn(async move {
-                        match message {
+                        match incoming_packet.message {
                             Message::KeepAlive => info!("keep alive"),
                             Message::DHT(payload) => {
                                 match DhtPacket::from_bytes(&payload) {
@@ -218,7 +256,7 @@ impl Bqti {
                                             return;
                                         };
 
-                                        let _ = bqti.kademlia.handle_packet(request, source_addr).await;
+                                        let _ = bqti.kademlia.handle_packet(request, incoming_packet.source_addr).await;
                                     },
                                     Err(e) => error!("dht parse error: {}", e),
                                 }
@@ -228,7 +266,7 @@ impl Bqti {
                                     Ok(pex) => {
                                         let pex_handler = bqti.pex.clone();
 
-                                        let _ = pex_handler.handle_incoming(pex, &source_addr, move |info_hash, socket| {
+                                        let _ = pex_handler.handle_incoming(pex, &incoming_packet.source_addr, move |info_hash, socket| {
                                             let kademlia = bqti.kademlia.clone();
 
                                             async move {
@@ -242,7 +280,7 @@ impl Bqti {
                             Message::Standard(payload) => {
                                 match StandardMessage::from_bytes(&payload) {
                                     Ok(msg) => {
-                                        bqti.torrenting_session.dispatch(msg, source_addr).await;
+                                        bqti.torrenting_session.dispatch(msg, incoming_packet.source_addr, reply).await;
                                     }
                                     Err(e) => error!("standard message parse error: {}", e),
                                 }
@@ -260,7 +298,6 @@ impl Bqti {
         cancellation_token.cancel();
         self.connection_manager.shutdown().await;
         join_set.shutdown().await;
-
         drop(ipc_server);
 
         Ok(())

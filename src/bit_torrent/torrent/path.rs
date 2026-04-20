@@ -11,13 +11,7 @@ pub struct TorrentPath {
 
 impl TorrentPath {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        let input_path = path.into();
-
-        let base_path = input_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(""));
-
+        let base_path = path.into();
         Self {
             base_path,
             paths: Vec::new(),

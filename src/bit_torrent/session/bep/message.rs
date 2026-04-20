@@ -6,8 +6,6 @@ use crate::{
     network::Message,
 };
 
-// NOTE When i do try_from to Message i think i am ignoring the headers
-
 pub type BepId = Vec<u8>;
 
 #[derive(Debug, Error)]
@@ -18,28 +16,15 @@ pub enum StandardMessageError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StandardMessage {
-    Handshake {
-        info_hash: Vec<u8>,
-        peer_id: BepId,
-    },
+    Handshake { info_hash: Vec<u8>, peer_id: BepId },
     Bitfield(Vec<u8>),
     Interested,
     NotInterested,
     Choke,
     Unchoke,
-    Request {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
-    Piece {
-        index: u32,
-        begin: u32,
-        data: Vec<u8>,
-    },
-    Have {
-        index: u32,
-    },
+    Request { index: u32 },
+    Piece { index: u32, data: Vec<u8> },
+    Have { index: u32 },
 }
 
 impl StandardMessage {

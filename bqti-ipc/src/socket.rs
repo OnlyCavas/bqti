@@ -6,7 +6,7 @@ use tokio::{
     net::UnixStream,
 };
 
-use crate::{Reply, Request, Response, socket_path};
+use crate::{Event, Reply, Request, socket_path};
 
 pub const SOCKET_PATH: &str = "BQTI_SOCKET";
 
@@ -24,7 +24,7 @@ impl Socket {
     }
 
     pub async fn connect() -> io::Result<Self> {
-        let path = socket_path()?;
+        let path = socket_path();
         Self::new(path).await
     }
 
@@ -38,7 +38,7 @@ impl Socket {
         serde_json::from_str(&buf).map_err(io::Error::other)
     }
 
-    pub fn event_stream(self) -> impl Stream<Item = io::Result<Response>> {
+    pub fn event_stream(self) -> impl Stream<Item = io::Result<Event>> {
         let mut stream = self.stream;
         let _ = stream.get_mut().shutdown();
 
