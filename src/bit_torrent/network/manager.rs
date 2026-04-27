@@ -1,11 +1,18 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
-use ::futures::future::join_all;
 use anyhow::Result;
-use quinn::{ConnectError, ConnectionError};
+use quinn::{ConnectError, ConnectionError, Endpoint};
 use thiserror::Error;
 use tokio::{
-    sync::{RwLock, mpsc},
+    sync::{RwLock, broadcast, mpsc},
     task::JoinSet,
     time::timeout,
 };
@@ -34,13 +41,13 @@ pub enum ConnectionManagerError {
 }
 
 use crate::network::{
-    config::QuicEndpointBuilder,
-    connection::{self, Connection, OnDisconnect},
+    connection::{self, BidirectionalStream, Connection, ControlStream, OnDisconnect},
     message::{Message, Packet},
     peer::Peer,
 };
 
 const CHANNEL_BUFFER_SIZE: usize = 1024;
+const DISCONNECT_SOCKETS_SIZE: usize = 64;
 
 #[derive(Clone)]
 pub struct ManagerOptions {
@@ -62,28 +69,51 @@ impl Default for ManagerOptions {
 #[derive(Clone)]
 pub struct ConnectionManager {
     endpoint: quinn::Endpoint,
-    connections: Arc<RwLock<HashMap<String, Connection>>>,
+    connections: Arc<RwLock<HashMap<SocketAddr, Arc<Connection>>>>,
+    connecting: Arc<RwLock<HashSet<SocketAddr>>>,
+    next_id: Arc<AtomicU64>,
     options: ManagerOptions,
     pub message_tx: mpsc::Sender<Packet>,
+    disconnect_tx: broadcast::Sender<SocketAddr>,
 }
 
 impl ConnectionManager {
     pub fn new(
-        tls_endpoint: QuicEndpointBuilder,
+        endpoint: Endpoint,
         options: ManagerOptions,
-    ) -> Result<(Self, mpsc::Receiver<Packet>)> {
+    ) -> Result<(Arc<Self>, mpsc::Receiver<Packet>)> {
         let (tx, stream_rx) = mpsc::channel::<Packet>(CHANNEL_BUFFER_SIZE);
-
-        let endpoint = tls_endpoint.build()?;
+        let (disconnect_tx, _) = broadcast::channel::<SocketAddr>(DISCONNECT_SOCKETS_SIZE);
 
         let manager = Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
+            connecting: Arc::new(RwLock::new(HashSet::new())),
             endpoint,
             message_tx: tx,
             options,
+            disconnect_tx,
+            next_id: Arc::new(AtomicU64::new(0)),
         };
 
-        Ok((manager, stream_rx))
+        Ok((Arc::new(manager), stream_rx))
+    }
+
+    pub async fn disconnect(&self, addr: &SocketAddr) {
+        let mut conns = self.connections.write().await;
+
+        let Some(conn) = conns.remove(&addr) else {
+            return;
+        };
+
+        conn.close();
+    }
+
+    fn next_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub fn subscribe_disconnects(&self) -> broadcast::Receiver<SocketAddr> {
+        self.disconnect_tx.subscribe()
     }
 
     pub fn get_local_ip(&self) -> Result<SocketAddr, ConnectionManagerError> {
@@ -92,34 +122,61 @@ impl ConnectionManager {
             .map_err(|_| ConnectionManagerError::LocalIpError())
     }
 
-    fn on_disconnect_handler(&self) -> OnDisconnect {
-        let conns_arc = self.connections.clone();
+    fn on_disconnect_handler(&self, connection_id: u64) -> OnDisconnect {
+        let weak_connections = Arc::downgrade(&self.connections);
+        let disconnect_tx = self.disconnect_tx.clone();
 
-        Arc::new(move |id| {
-            let conns = conns_arc.clone();
+        Arc::new(move |addr| {
+            let connections = match weak_connections.upgrade() {
+                Some(s) => s,
+                None => return,
+            };
+
+            let disconnect_tx = disconnect_tx.clone();
+
             tokio::spawn(async move {
-                conns.write().await.remove(&id);
-                info!("peer disconnected: {}", id);
+                let mut connections = connections.write().await;
+
+                if connections.get(&addr).map(|c| c.id) != Some(connection_id) {
+                    return;
+                }
+
+                debug!("peer disconnected: {}", addr);
+
+                connections.remove(&addr);
+                drop(connections);
+                let _ = disconnect_tx.send(addr);
             });
         })
     }
 
-    async fn add_peer(
-        connections: &Arc<RwLock<HashMap<String, Connection>>>,
-        peer_id: String,
-        connection: Connection,
-    ) {
-        let mut conns = connections.write().await;
+    async fn append_connection(
+        &self,
+        connection: Arc<Connection>,
+        peer_addr: &SocketAddr,
+    ) -> Result<(), ConnectionManagerError> {
+        let local_addr = self.get_local_ip()?;
+        let mut connections = self.connections.write().await;
 
-        if conns.contains_key(&peer_id) {
-            info!("peer already connected: {}", peer_id);
-            return;
+        if !connections.contains_key(peer_addr) {
+            connections.insert(*peer_addr, connection);
+
+            return Ok(());
         }
 
-        conns.insert(peer_id, connection);
+        if local_addr < *peer_addr {
+            connection.close();
+            return Ok(());
+        }
+
+        let old = connections.remove(peer_addr).unwrap();
+        connections.insert(*peer_addr, connection);
+        old.close();
+
+        Ok(())
     }
 
-    pub async fn start_listening(&self, cancel: CancellationToken) {
+    pub async fn start_listening(self: &Arc<Self>, cancel: CancellationToken) {
         let mut join_handle = JoinSet::new();
 
         match self.get_local_ip() {
@@ -142,11 +199,14 @@ impl ConnectionManager {
                         continue;
                     }
 
-                    let on_disconnect = self.on_disconnect_handler();
-                    let connections = self.connections.clone();
-                    let dispatcher = self.message_tx.clone();
+                    let weak_manager = Arc::downgrade(self);
 
                     join_handle.spawn(async move {
+                        let manager = match weak_manager.upgrade() {
+                            Some(s) => s,
+                            None => return,
+                        };
+
                         let conn_result = timeout(handshake_timeout, incoming).await;
 
                         let Ok(Ok(conn)) = conn_result else {
@@ -157,16 +217,26 @@ impl ConnectionManager {
                             return;
                         };
 
-                        let peer_id = conn.remote_address().to_string();
+                        let next_id = manager.next_id();
+                        let peer_addr = conn.remote_address();
 
-                        let Ok(connection) =
-                            Connection::spawn(peer_id.clone(), conn, dispatcher, on_disconnect).await
-                        else {
-                            error!("failed to listen to new connections");
-                            return;
+                        let connection = match Connection::new(
+                            next_id,
+                            peer_addr.clone(),
+                            conn,
+                            manager.message_tx.clone(),
+                            manager.on_disconnect_handler(next_id)
+                        ).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                error!("failed to listen to new connections: {}", e.to_string());
+                                return;
+                            },
                         };
 
-                        Self::add_peer(&connections, peer_id, connection).await;
+                        if let Err(e) = manager.append_connection(connection, &peer_addr).await {
+                            debug!("failed to append connection: {}", e.to_string());
+                        }
                     });
                 }
             }
@@ -185,7 +255,8 @@ impl ConnectionManager {
     }
 
     pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {
-        let peer_id = peer.address.to_string();
+        let peer_addr = peer.address;
+
         let local_addr = self
             .endpoint
             .local_addr()
@@ -196,27 +267,46 @@ impl ConnectionManager {
         }
 
         {
-            let conns = self.connections.read().await;
+            let connections = self.connections.read().await;
+            let dialing = self.connecting.read().await;
 
-            if let Some(_conn) = conns.get(&peer_id) {
+            if connections.contains_key(&peer_addr) || dialing.contains(&peer_addr) {
                 return Ok(());
             }
         }
 
-        // FIX &peer.id
-        let connecting = self.endpoint.connect(peer.address, "localhost")?.await?;
+        let mut dialing = self.connecting.write().await;
 
-        let connection = Connection::spawn(
-            peer_id.clone(),
-            connecting,
-            self.message_tx.clone(),
-            self.on_disconnect_handler(),
-        )
-        .await?;
+        if dialing.contains(&peer_addr) {
+            return Ok(());
+        }
 
-        Self::add_peer(&self.connections, peer_id, connection).await;
+        dialing.insert(peer_addr);
+        drop(dialing);
 
-        Ok(())
+        let handshake = async {
+            let id = self.next_id();
+            let connecting = self.endpoint.connect(peer.address, "localhost")?.await?;
+
+            let connection = Connection::new(
+                id,
+                peer_addr.clone(),
+                connecting,
+                self.message_tx.clone(),
+                self.on_disconnect_handler(id),
+            )
+            .await?;
+
+            self.append_connection(connection, &peer_addr).await?;
+            Ok::<_, ConnectionManagerError>(())
+        }
+        .await;
+
+        let mut dialing = self.connecting.write().await;
+        dialing.remove(&peer_addr);
+        drop(dialing);
+
+        handshake
     }
 
     pub async fn send(
@@ -224,32 +314,67 @@ impl ConnectionManager {
         peer: &Peer,
         msg: impl Into<Message>,
     ) -> Result<(), ConnectionManagerError> {
-        let conns = self.connections.read().await;
-        let peer_id = peer.address.to_string();
         let local_addr = self.get_local_ip()?;
 
         if self.is_self_connection(&peer.address, &local_addr) {
             return Err(ConnectionManagerError::SelfConnectionError());
         }
 
-        let Some(conn) = conns.get(&peer_id) else {
-            error!("failed to send message");
-            return Err(ConnectionManagerError::EstablishError(peer_id));
+        let connections = {
+            let conns = self.connections.read().await;
+            conns.get(&peer.address).cloned()
         };
 
-        conn.send_message(msg.into()).await?;
+        let Some(connection) = connections else {
+            error!("failed to send control message");
+
+            return Err(ConnectionManagerError::EstablishError(
+                peer.address.to_string(),
+            ));
+        };
+
+        connection.send_control(msg.into()).await?;
 
         Ok(())
     }
 
+    pub async fn request(
+        &self,
+        peer: &Peer,
+        msg: impl Into<Message>,
+    ) -> Result<Vec<u8>, ConnectionManagerError> {
+        let local_addr = self.get_local_ip()?;
+
+        if self.is_self_connection(&peer.address, &local_addr) {
+            return Err(ConnectionManagerError::SelfConnectionError());
+        }
+
+        let connection = {
+            let conns = self.connections.read().await;
+            conns.get(&peer.address).cloned()
+        };
+
+        let Some(connection) = connection else {
+            error!("failed to send request and receive response");
+
+            return Err(ConnectionManagerError::EstablishError(
+                peer.address.to_string(),
+            ));
+        };
+
+        let response = connection.request(msg.into()).await?;
+
+        Ok(response)
+    }
+
     pub async fn shutdown(&self) {
-        let mut conns = self.connections.write().await;
+        let connections: Vec<_> = {
+            let mut conns = self.connections.write().await;
+            conns.drain().map(|(_, c)| c).collect()
+        };
 
-        let tasks: Vec<_> = conns
-            .drain()
-            .map(|(_, connection)| connection.close())
-            .collect();
-
-        join_all(tasks).await;
+        for conn in connections {
+            conn.close();
+        }
     }
 }

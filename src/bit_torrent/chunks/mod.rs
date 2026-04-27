@@ -1,6 +1,5 @@
 use std::{fs::File, sync::Arc};
 
-mod assembler;
 mod file_handler;
 
 type Size = u64;
@@ -22,5 +21,4 @@ impl FileChunk {
     }
 }
 
-pub use assembler::PieceAssembler;
 pub use file_handler::{ChunkHandlerError, Downloading, MultiFileHandler, Reader, Seeding, Writer};

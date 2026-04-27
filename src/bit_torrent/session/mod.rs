@@ -21,6 +21,9 @@ pub enum TorrentSessionError {
     #[error("unable to find the home directory")]
     UnableToFindXDGFolder(),
 
+    #[error("invalid transition: {0}")]
+    InvalidTransition(String),
+
     #[error(transparent)]
     ChunkReaderError(#[from] ChunkHandlerError),
 }
@@ -28,6 +31,7 @@ pub enum TorrentSessionError {
 pub use bep::{
     BLOCK_SIZE, BepId, BepRouter, BepRouterError, StandardMessage, StandardMessageError,
 };
+pub mod cache;
 pub use bit_field::BitField;
-pub use manager::SessionManager;
+pub use manager::{SessionManager, SessionManagerError};
 pub use session::SessionMode;

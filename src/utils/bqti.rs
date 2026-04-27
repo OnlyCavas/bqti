@@ -14,11 +14,28 @@ use crate::{
     types::UnixDate,
 };
 
+const UPLOADS_DIRECTORY: &'static str = "uploads";
+const DOWNLOADS_DIRECTORY: &'static str = "downloads";
+
 pub fn bqti_data_dir() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("XDG_DATA_HOME") {
+        return Some(PathBuf::from(base).join("bqti"));
+    }
+
     ProjectDirs::from("", "", "bqti").map(|proj| proj.data_dir().to_path_buf())
 }
 
-pub async fn link(user_downloads_dir: PathBuf, info_hash_hex: String) -> io::Result<()> {
+pub fn uploads_dir() -> Option<PathBuf> {
+    let uploads_dir = bqti_data_dir()?.join(UPLOADS_DIRECTORY);
+    uploads_dir.exists().then_some(uploads_dir)
+}
+
+pub fn downloads_dir() -> Option<PathBuf> {
+    let downloads_dir = bqti_data_dir()?.join(DOWNLOADS_DIRECTORY);
+    downloads_dir.exists().then_some(downloads_dir)
+}
+
+pub async fn link(user_downloads_dir: PathBuf, info_hash_hex: String) -> io::Result<PathBuf> {
     let internal_dir = bqti_data_dir()
         .map(|p| p.join("downloads").join(&info_hash_hex))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Could not find bqti data dir"))?;
@@ -38,39 +55,42 @@ pub async fn link(user_downloads_dir: PathBuf, info_hash_hex: String) -> io::Res
         }
 
         let mut perms = fs::metadata(&internal_dir)?.permissions();
+
         perms.set_mode(0o700);
+
         fs::set_permissions(&internal_dir, perms)?;
 
         let dest_symlink = user_downloads_dir.join("download");
+
         if dest_symlink.exists() || dest_symlink.is_symlink() {
             fs::remove_file(&dest_symlink).or_else(|_| fs::remove_dir_all(&dest_symlink))?;
         }
+
         symlink(&internal_dir, &dest_symlink)?;
-        Ok(())
+
+        Ok(dest_symlink)
     })
     .await
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
 }
 
-pub fn uploads_dir(
-    user_base: &Path,
-    info_hash_hex: &str,
-    metadata: &TorrentFile,
-) -> Option<PathBuf> {
+pub fn ensure_upload_dir(user_base: &Path, metadata: &TorrentFile) -> Option<PathBuf> {
     let bqti_dir = bqti_data_dir()?;
-    let internal_base = bqti_dir.join("uploads").join(info_hash_hex);
+
+    let internal_base = bqti_dir
+        .join(UPLOADS_DIRECTORY)
+        .join(metadata.info_hash().to_string());
 
     for file in metadata.files() {
-        let rel_path = &file.to_path();
+        let rel_path = file.to_path();
 
-        let source_path = user_base.join(rel_path);
-        let target_path = internal_base.join(rel_path);
-
-        if !source_path.exists() {
+        if !user_base.exists() {
             return None;
         }
 
-        if let Some(parent) = target_path.parent() {
+        let target = internal_base.join(&rel_path);
+
+        if let Some(parent) = target.parent() {
             fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
@@ -78,17 +98,18 @@ pub fn uploads_dir(
                 .ok()?;
         }
 
-        if !target_path.exists() {
-            fs::hard_link(&source_path, &target_path).ok()?;
+        if !target.exists() {
+            let source = user_base.join(rel_path);
+            fs::hard_link(&source, &target).ok()?;
         }
     }
 
     Some(internal_base)
 }
 
-pub fn downloads_dir(entry: impl Into<PathBuf>) -> Option<PathBuf> {
+pub fn ensure_download_dir(entry: impl Into<PathBuf>) -> Option<PathBuf> {
     let base = bqti_data_dir()?;
-    let path = base.join("downloads").join(entry.into());
+    let path = base.join(DOWNLOADS_DIRECTORY).join(entry.into());
 
     if !path.exists() {
         fs::DirBuilder::new()

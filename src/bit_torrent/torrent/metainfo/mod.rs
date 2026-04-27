@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, fmt::Display, net::SocketAddr};
 
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::{
     bit_torrent::{
         bencode::{BencodeInfo, BencodeTorrent, FileInfo},
+        magnet::MagnetLink,
         torrent::metainfo::{
             v1::{EmbededFile, TorrentV1},
             v2::TorrentV2,
@@ -36,11 +37,16 @@ pub enum TorrentError {
     Unsupported(String),
 }
 
-#[enum_dispatch(Metainfo, Integrity, PieceIntegrity)]
+#[enum_dispatch(Metainfo, Magnet, Integrity, PieceIntegrity)]
 #[derive(Clone)]
 pub enum TorrentFile {
     V1(TorrentV1),
     V2(TorrentV2),
+}
+
+#[enum_dispatch]
+pub trait Magnet {
+    fn magnet(&self) -> MagnetLink;
 }
 
 #[enum_dispatch]
@@ -88,8 +94,26 @@ pub enum InfoHash {
 }
 
 impl InfoHash {
-    pub fn to_string(&self) -> String {
-        hex::encode(self.as_ref())
+    pub fn from_hex(s: &str) -> Option<Self> {
+        match s.len() {
+            40 => {
+                let bytes = hex::decode(s).ok()?;
+                let arr: Hash2OBytes = bytes.try_into().ok()?;
+                Some(InfoHash::V1(InfoHashV1(arr)))
+            }
+            64 => {
+                let bytes = hex::decode(s).ok()?;
+                let arr: [u8; 32] = bytes.try_into().ok()?;
+                Some(InfoHash::V2(InfoHashV2(arr)))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Display for InfoHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.as_ref()))
     }
 }
 

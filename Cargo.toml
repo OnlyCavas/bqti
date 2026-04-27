@@ -1,13 +1,42 @@
+[workspace]
+members = ["bqti-ipc"]
+
+[workspace.package]
+version = "0.1.0"
+description = "Bit Torrent with QUIC + TEE + I2P"
+authors = ["Diogo Assunção"]
+edition = "2024"
+repository = "https://github.com/OnlyCavas/bqti"
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["full"] }
+anyhow = "1.0.102"
+tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_level_debug"] }
+tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
+futures = "0.3.32"
+libc = "0.2.183"
+
 [package]
 name = "bqti"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-serde = { version = "1.0.228", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+libc.workspace = true
+bqti-ipc = { path = "bqti-ipc" }
 serde_bencode = "0.2.4"
 serde_bytes = "0.11.19"
-thiserror = "2.0.18"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 hex = "0.4.3"
@@ -17,19 +46,15 @@ either = "1.15.0"
 clap = { version = "4", features = ["derive"] }
 enum_dispatch = "0.3.13"
 crossbeam = "0.8.4"
-tracing = { version = "0.1.44", features = ["max_level_trace", "release_max_level_debug"] }
-tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
 quinn = "0.11.9"
-tokio = { version = "1.50.0", features = ["full"] }
 tokio-util = "0.7.18"
 async-trait = "0.1.89"
 rustls = { version = "0.23.37", features = ["aws-lc-rs", "ring"] }
 rustls-pki-types = "1.14.0"
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
-futures = "0.3.32"
 directories = "6.0.0"
-anyhow = "1.0.102"
 rand = "0.10.0"
 ring = "0.17.14"
 indexmap = "2.13.0"
-libc = "0.2.183"
+indicatif = "0.18.4"
+console = "0.16.3"

@@ -27,8 +27,14 @@ pub struct V2Builder {
     creation_date: Option<u64>,
     comment: Option<String>,
     created_by: Option<String>,
+
+    // NOTE improve torrent v2 support
+    #[allow(dead_code)]
     piece_layers: Option<Vec<EmbededFile>>,
+
+    #[allow(dead_code)]
     file_tree: Option<HashMap<String, FileTreeNode>>,
+
     dht_nodes: Option<Vec<SocketAddr>>,
 }
 
