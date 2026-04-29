@@ -117,9 +117,30 @@ impl ConnectionManager {
     }
 
     pub fn get_local_ip(&self) -> Result<SocketAddr, ConnectionManagerError> {
-        self.endpoint
+        let addr = self
+            .endpoint
             .local_addr()
-            .map_err(|_| ConnectionManagerError::LocalIpError())
+            .map_err(|_| ConnectionManagerError::LocalIpError())?;
+
+        if !addr.ip().is_unspecified() {
+            return Ok(addr);
+        }
+
+        let ip = {
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+                .and_then(|s| {
+                    s.connect("8.8.8.8:80")?;
+                    Ok(s)
+                })
+                .map_err(|_| ConnectionManagerError::LocalIpError())?;
+
+            socket
+                .local_addr()
+                .map_err(|_| ConnectionManagerError::LocalIpError())?
+                .ip()
+        };
+
+        Ok(SocketAddr::new(ip, addr.port()))
     }
 
     fn on_disconnect_handler(&self, connection_id: u64) -> OnDisconnect {
@@ -251,7 +272,7 @@ impl ConnectionManager {
         let peer_ip = peer_addr.ip();
         let local_ip = local_addr.ip();
 
-        peer_ip == local_ip || peer_ip.is_loopback() || local_ip.is_unspecified()
+        peer_ip.is_loopback() || peer_ip == local_ip
     }
 
     pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {

@@ -163,8 +163,8 @@ impl RpcHandler {
             self.connection_manager.connect(&peer).await?;
             self.connection_manager
                 .send(&peer, Message::try_from(packet)?)
-        }
-        .await;
+                .await
+        };
 
         if let Err(e) = connect_and_send {
             {

@@ -73,6 +73,7 @@ impl QuicEndpointBuilder {
 
         transport_config.keep_alive_interval(Some(Duration::from_secs(1)));
         transport_config.max_idle_timeout(Some(IdleTimeout::from(quinn::VarInt::from_u32(10_000))));
+        transport_config.enable_segmentation_offload(false);
 
         Self {
             addr,
