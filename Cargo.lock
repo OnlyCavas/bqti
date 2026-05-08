@@ -181,11 +181,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "bqti-ipc",
  "chrono",
  "clap",
  "console",
  "crossbeam",
+ "data-encoding",
  "directories",
  "either",
  "enum_dispatch",

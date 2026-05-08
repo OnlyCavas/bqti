@@ -8,7 +8,7 @@ use crate::{
     utils::bqti::fetch_current_timestamp,
 };
 
-pub const PRUNE_CHECK_DURATION: Duration = Duration::from_mins(5);
+pub const PRUNE_CHECK_DURATION: Duration = Duration::from_secs(5 * 60);
 
 const MAX_STORE_ENTRIES: usize = 10_000;
 const DEFAULT_TTL: UnixDate = 35 * 60;

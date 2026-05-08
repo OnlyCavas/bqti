@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         SubCommand::Daemon(daemon) => ipc::handle_client(daemon).await,
         SubCommand::Certs { kind, output } => standalone::handle_certs(kind, output).await,
         SubCommand::Torrent { torrent } => standalone::handle_torrent(torrent, cli.verbose),
-        SubCommand::Serve { addr, no_cert } => daemon::handle_serve(addr, no_cert).await,
+        SubCommand::Serve { addr, no_cert, i2p } => daemon::handle_serve(addr, no_cert, i2p).await,
     }?;
 
     Ok(())

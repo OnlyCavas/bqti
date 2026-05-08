@@ -89,8 +89,6 @@ impl Kademlia {
             route_table.host.id.clone()
         };
 
-        info!("ping");
-
         self.rpc_handler
             .reply(
                 &sender,

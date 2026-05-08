@@ -1,4 +1,5 @@
-use std::{collections::HashMap, fmt::Display, net::SocketAddr};
+use core::fmt;
+use std::{collections::HashMap, fmt::Display, net::SocketAddr, str::FromStr};
 
 use enum_dispatch::enum_dispatch;
 use thiserror::Error;
@@ -44,6 +45,67 @@ pub enum TorrentFile {
     V2(TorrentV2),
 }
 
+#[derive(Debug, Clone)]
+pub enum TorrentAddr {
+    Ip(SocketAddr),
+    I2P(String),
+}
+
+impl TorrentAddr {
+    fn is_i2p(s: &str) -> bool {
+        s.ends_with(".i2p") || (s.len() > 100 && !s.contains(':'))
+    }
+
+    pub fn from_raw_parts(host: &str, port: u16) -> Result<Self, TorrentError> {
+        if Self::is_i2p(host) {
+            return Ok(Self::I2P(host.to_string()));
+        }
+
+        Self::from_str(&format!("{}:{}", host, port))
+    }
+
+    pub fn to_raw_parts(&self) -> (String, u16) {
+        match self {
+            Self::Ip(addr) => (addr.ip().to_string(), addr.port()),
+            Self::I2P(dest) => (dest.clone(), 0),
+        }
+    }
+}
+
+impl From<&TorrentAddr> for (String, u16) {
+    fn from(addr: &TorrentAddr) -> Self {
+        addr.to_raw_parts()
+    }
+}
+
+impl fmt::Display for TorrentAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ip(addr) => write!(f, "{}", addr),
+            Self::I2P(dest) => write!(f, "{}", dest),
+        }
+    }
+}
+
+impl FromStr for TorrentAddr {
+    type Err = TorrentError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if Self::is_i2p(s) {
+            return Ok(Self::I2P(s.to_string()));
+        }
+
+        if let Ok(socket) = s.parse::<SocketAddr>() {
+            return Ok(Self::Ip(socket));
+        }
+
+        Err(TorrentError::Failed(format!(
+            "failed to parse address: {}",
+            s
+        )))
+    }
+}
+
 #[enum_dispatch]
 pub trait Magnet {
     fn magnet(&self) -> MagnetLink;
@@ -53,7 +115,7 @@ pub trait Magnet {
 pub trait Metainfo {
     fn announce(&self) -> Option<&str>;
     fn announce_list(&self) -> Option<&[Vec<String>]>;
-    fn dht_nodes(&self) -> Option<&[SocketAddr]>;
+    fn dht_nodes(&self) -> Option<&[TorrentAddr]>;
     fn name(&self) -> &str;
     fn version(&self) -> u8;
     fn info_hash(&self) -> &InfoHash;
@@ -186,7 +248,7 @@ pub struct TorrentCommon {
     pub comment: Option<String>,
     pub created_by: Option<String>,
     pub web_seeds: Option<Vec<String>>,
-    pub dht_nodes: Option<Vec<SocketAddr>>,
+    pub dht_nodes: Option<Vec<TorrentAddr>>,
 }
 
 impl TorrentCommon {
@@ -200,7 +262,7 @@ impl TorrentCommon {
         comment: Option<String>,
         created_by: Option<String>,
         web_seeds: Option<Vec<String>>,
-        dht_nodes: Option<Vec<SocketAddr>>,
+        dht_nodes: Option<Vec<TorrentAddr>>,
     ) -> Self {
         Self {
             info_hash,
@@ -248,12 +310,9 @@ impl From<&TorrentFile> for BencodeInfo {
 
 impl From<&TorrentFile> for BencodeTorrent {
     fn from(value: &TorrentFile) -> Self {
-        let dht_nodes: Option<Vec<(String, u16)>> = value.dht_nodes().map(|nodes_slice| {
-            nodes_slice
-                .iter()
-                .map(|addr| (addr.ip().to_string(), addr.port()))
-                .collect()
-        });
+        let dht_nodes: Option<Vec<(String, u16)>> = value
+            .dht_nodes()
+            .map(|nodes_slice| nodes_slice.iter().map(|addr| addr.into()).collect());
 
         BencodeTorrent::new(
             value.announce().map(|s| s.to_string()),

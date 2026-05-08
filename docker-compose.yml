@@ -1,0 +1,121 @@
+x-bqti: &bqti
+  image: localhost/bqti:latest
+
+x-leecher: &leecher
+  <<: *bqti
+  entrypoint: ["/bin/bash", "/scripts/leecher.sh"]
+  networks: [swarm]
+  depends_on:
+    seeder:
+      condition: service_healthy
+
+services:
+  bootstrap:
+    <<: *bqti
+    command: ["bqti", "serve", "0.0.0.0:6881", "--no-cert"]
+    networks:
+      swarm:
+        aliases: [bootstrap]
+    ports:
+      - "9001:6881"
+    volumes:
+      - bootstrap-sock:/run/bqti
+    environment:
+      BQTI_HOST: 0.0.0.0
+      BQTI_PORT: 6881
+      BQTI_SOCKET: /run/bqti/default.sock
+    healthcheck:
+      test: ["CMD-SHELL", "test -S $${BQTI_SOCKET}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  seeder:
+    <<: *bqti
+    entrypoint: ["/bin/bash", "/scripts/seeder.sh"]
+    networks: [swarm]
+    ports:
+      - "9002:6881"
+    volumes:
+      - ./docker/scripts:/scripts:ro,z
+      - ./resources/send:/source:ro,Z
+      - seeder-home:/home/appuser
+      - shared-torrents:/shared
+      - seeder-sock:/run/bqti
+    environment:
+      BQTI_HOST: 0.0.0.0
+      BQTI_PORT: 6881
+      BQTI_SOCKET: /run/bqti/default.sock
+      BQTI_BOOTSTRAP: bootstrap:6881
+    depends_on:
+      bootstrap:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /shared/seeder-ready"]
+      interval: 2s
+      timeout: 120s
+      retries: 60
+
+  leecher-1:
+    <<: *leecher
+    ports:
+      - "9003:6881"
+    volumes:
+      - ./docker/scripts:/scripts:ro,z
+      - shared-torrents:/shared:ro
+      - leecher-1-data:/downloads
+      - leecher-1-sock:/run/bqti
+    environment:
+      BQTI_HOST: 0.0.0.0
+      BQTI_PORT: 6881
+      BQTI_SOCKET: /run/bqti/default.sock
+      BQTI_BOOTSTRAP: bootstrap:6881
+      NODE_NAME: leecher-1
+
+  leecher-2:
+    <<: *leecher
+    ports:
+      - "9004:6881"
+    volumes:
+      - ./docker/scripts:/scripts:ro,z
+      - shared-torrents:/shared:ro
+      - leecher-2-data:/downloads
+      - leecher-2-sock:/run/bqti
+    environment:
+      BQTI_HOST: 0.0.0.0
+      BQTI_PORT: 6881
+      BQTI_SOCKET: /run/bqti/default.sock
+      BQTI_BOOTSTRAP: bootstrap:6881
+      NODE_NAME: leecher-2
+
+  leecher-3:
+    <<: *leecher
+    ports:
+      - "9005:6881"
+    volumes:
+      - ./docker/scripts:/scripts:ro,z
+      - shared-torrents:/shared:ro
+      - leecher-3-data:/downloads
+      - leecher-3-sock:/run/bqti
+    environment:
+      BQTI_HOST: 0.0.0.0
+      BQTI_PORT: 6881
+      BQTI_SOCKET: /run/bqti/default.sock
+      BQTI_BOOTSTRAP: bootstrap:6881
+      NODE_NAME: leecher-3
+
+networks:
+  swarm:
+    driver: bridge
+
+volumes:
+  bootstrap-sock:
+  seeder-home:
+  seeder-sock:
+  shared-torrents:
+  leecher-1-data:
+  leecher-1-sock:
+  leecher-2-data:
+  leecher-2-sock:
+  leecher-3-data:
+  leecher-3-sock:

@@ -9,6 +9,7 @@ pub enum MessageError {
     ParseFailed(),
 }
 
+#[derive(Debug)]
 pub struct Packet {
     pub message: Message,
     pub source_addr: SocketAddr,

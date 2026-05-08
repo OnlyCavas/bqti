@@ -22,6 +22,9 @@ pub enum SubCommand {
             help = "disable TLS certificate verification (insecure, development only)"
         )]
         no_cert: bool,
+
+        #[arg(long, help = "enable I2P routing")]
+        i2p: bool,
     },
 
     #[command(flatten)]

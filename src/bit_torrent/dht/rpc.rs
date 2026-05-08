@@ -45,7 +45,7 @@ pub enum RpcError {
 }
 
 pub struct RpcHandler {
-    connection_manager: Arc<ConnectionManager>,
+    pub connection_manager: Arc<ConnectionManager>, // HACK shouldn't be public
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<DhtResponse>>>>,
     next_id: AtomicU64,
 }

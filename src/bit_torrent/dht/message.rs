@@ -57,6 +57,7 @@ impl<T: for<'de> Deserialize<'de>> RpcEnvelope<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum KademliaData {
     Peers(HashSet<SocketAddr>),
+    I2Peers(HashSet<String>),
     Value(Vec<u8>),
 }
 

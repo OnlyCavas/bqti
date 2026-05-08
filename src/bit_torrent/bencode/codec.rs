@@ -1,12 +1,12 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_bencode::value::Value;
 
-use crate::types::{ByteSize, MerkleRoot, PieceByte, UnixDate};
+use crate::{
+    torrent::metainfo::TorrentAddr,
+    types::{ByteSize, MerkleRoot, PieceByte, UnixDate},
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BencodeTorrent {
@@ -87,14 +87,11 @@ impl BencodeTorrent {
         self.extra.get(id)
     }
 
-    pub fn dht_nodes(&self) -> Option<Vec<SocketAddr>> {
+    pub fn dht_nodes(&self) -> Option<Vec<TorrentAddr>> {
         self.nodes.as_ref().map(|nodes| {
             nodes
                 .iter()
-                .filter_map(|(ip_str, port)| {
-                    let ip: IpAddr = ip_str.parse().ok()?;
-                    Some(SocketAddr::from((ip, *port)))
-                })
+                .filter_map(|(ip_str, port)| Some(TorrentAddr::from_raw_parts(ip_str, *port).ok()?))
                 .collect()
         })
     }
@@ -212,9 +209,6 @@ impl BencodeInfo {
             (None, None, Some(files)) => Some(BencodeMode::MultiFile {
                 files: files.clone(),
             }),
-            // (None, None, None, Some(file_tree)) => Some(TorrentMode::FileTree {
-            //     tree: file_tree.clone(),
-            // }),
             _ => None,
         }
     }

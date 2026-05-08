@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::collections::HashMap;
 
 use clap::error::Result;
 
@@ -15,7 +15,7 @@ use crate::{
         },
     },
     hasher::Sha256Hash,
-    torrent::metainfo::Magnet,
+    torrent::metainfo::{Magnet, TorrentAddr},
     types::{Hash32Bytes, MerkleRoot, PieceByte},
 };
 
@@ -324,7 +324,7 @@ impl Metainfo for TorrentV2 {
         &[]
     }
 
-    fn dht_nodes(&self) -> Option<&[SocketAddr]> {
+    fn dht_nodes(&self) -> Option<&[TorrentAddr]> {
         self.info.dht_nodes.as_deref()
     }
 }
