@@ -64,7 +64,7 @@ pub enum KademliaError {
 
 pub struct Kademlia {
     auth: Arc<AuthManager>,
-    rpc_handler: Arc<RpcHandler>,
+    pub(crate) rpc_handler: Arc<RpcHandler>, // HACK shouldnt be public
     store: Arc<RwLock<DHTStore>>,
     pub route_table: Arc<RwLock<RouteTable>>,
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use crate::{
     bit_torrent::{
@@ -13,6 +13,7 @@ use crate::{
             piece_hash::{PieceHasher, PieceHasherV1},
         },
     },
+    torrent::metainfo::TorrentAddr,
     types::{ByteSize, PieceByte, UnixDate},
     utils::bqti,
 };
@@ -35,7 +36,7 @@ pub struct V2Builder {
     #[allow(dead_code)]
     file_tree: Option<HashMap<String, FileTreeNode>>,
 
-    dht_nodes: Option<Vec<SocketAddr>>,
+    dht_nodes: Option<Vec<TorrentAddr>>,
 }
 
 impl V2Builder {
@@ -110,7 +111,7 @@ impl V2Builder {
     pub fn dht_nodes(mut self, nodes: impl Into<Option<Vec<String>>>) -> Self {
         self.dht_nodes = nodes.into().map(|vec| {
             vec.into_iter()
-                .filter_map(|s| s.parse::<SocketAddr>().ok())
+                .filter_map(|s| TorrentAddr::from_str(&s).ok())
                 .collect()
         });
 

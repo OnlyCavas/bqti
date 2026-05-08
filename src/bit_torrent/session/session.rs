@@ -33,6 +33,8 @@ use crate::{
     },
 };
 
+const BEP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub enum SessionMode {
     Download,
     Seed { source_dir: PathBuf },
@@ -440,7 +442,7 @@ impl TorrentSession {
 
                 let handshake_fut = session.bep_router.handshake(session.clone(), addr);
 
-                let Ok(result) = timeout(Duration::from_secs(5), handshake_fut).await else {
+                let Ok(result) = timeout(BEP_HANDSHAKE_TIMEOUT, handshake_fut).await else {
                     debug!("bep handshake timeout: {}", addr);
                     session.peers.write().await.remove(&addr);
 

@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::{
     bit_torrent::{
@@ -9,7 +9,7 @@ use crate::{
         },
     },
     hasher::Sha1Hash,
-    torrent::metainfo::Magnet,
+    torrent::metainfo::{Magnet, TorrentAddr},
     types::{ByteSize, PieceByte},
 };
 
@@ -283,7 +283,7 @@ impl Metainfo for TorrentV1 {
         &self.pieces
     }
 
-    fn dht_nodes(&self) -> Option<&[SocketAddr]> {
+    fn dht_nodes(&self) -> Option<&[TorrentAddr]> {
         self.info.dht_nodes.as_deref()
     }
 }

@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Result;
-use quinn::{ConnectError, ConnectionError, Endpoint};
+use quinn::{ConnectError, ConnectionError};
 use thiserror::Error;
 use tokio::{
     sync::{RwLock, broadcast, mpsc},
@@ -42,6 +42,7 @@ pub enum ConnectionManagerError {
 
 use crate::network::{
     connection::{self, BidirectionalStream, Connection, ControlStream, OnDisconnect},
+    endpoint::NetworkEndpoint,
     message::{Message, Packet},
     peer::Peer,
 };
@@ -61,14 +62,14 @@ impl Default for ManagerOptions {
     fn default() -> Self {
         Self {
             max_connections: 50,
-            handshake_timeout: Duration::from_secs(5),
+            handshake_timeout: Duration::from_secs(60),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct ConnectionManager {
-    endpoint: quinn::Endpoint,
+    pub endpoint: NetworkEndpoint,
     connections: Arc<RwLock<HashMap<SocketAddr, Arc<Connection>>>>,
     connecting: Arc<RwLock<HashSet<SocketAddr>>>,
     next_id: Arc<AtomicU64>,
@@ -79,7 +80,7 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     pub fn new(
-        endpoint: Endpoint,
+        endpoint: NetworkEndpoint,
         options: ManagerOptions,
     ) -> Result<(Arc<Self>, mpsc::Receiver<Packet>)> {
         let (tx, stream_rx) = mpsc::channel::<Packet>(CHANNEL_BUFFER_SIZE);
@@ -211,10 +212,10 @@ impl ConnectionManager {
                     join_handle.shutdown().await;
                     break;
                 },
-                Some(incoming) = async {  self.endpoint.accept().await} => {
+                Some(incoming) = async {  self.endpoint.inner().accept().await} => {
                     let handshake_timeout = self.options.handshake_timeout;
 
-                    if self.endpoint.open_connections() >= self.options.max_connections {
+                    if self.endpoint.inner().open_connections() >= self.options.max_connections {
                         info!("max connections reached: {}", self.options.max_connections);
                         incoming.refuse();
                         continue;
@@ -307,7 +308,11 @@ impl ConnectionManager {
 
         let handshake = async {
             let id = self.next_id();
-            let connecting = self.endpoint.connect(peer.address, "localhost")?.await?;
+            let connecting = self
+                .endpoint
+                .inner()
+                .connect(peer.address, "localhost")?
+                .await?;
 
             let connection = Connection::new(
                 id,

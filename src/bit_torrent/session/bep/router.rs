@@ -11,13 +11,17 @@ use crate::{
         torrent::metainfo::{InfoHash, Metainfo},
     },
     dht::{BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht},
-    network::{ConnectionManager, ConnectionManagerError, Message, Peer},
+    network::{
+        AddressResolver, ConnectionManager, ConnectionManagerError, Message, NetworkEndpoint, Peer,
+        resolve_address,
+    },
     session::{
         StandardMessage, StandardMessageError,
         bep::pipeline::BlockRequest,
         session::{PieceRequest, TorrentSession},
         state::ActiveMode,
     },
+    torrent::metainfo::TorrentAddr,
 };
 
 pub struct BepPeer {
@@ -46,9 +50,9 @@ pub enum BepRouterError {
     NonActivePipeline(),
 }
 
-const DHT_ANNOUNCE_INTERVAL: Duration = Duration::from_mins(30);
-const DHT_DISCOVERY_INTERVAL: Duration = Duration::from_mins(1);
-const PEX_FALLBACK_INTERVAL: Duration = Duration::from_mins(1);
+const DHT_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const DHT_DISCOVERY_INTERVAL: Duration = Duration::from_secs(1 * 60);
+const PEX_FALLBACK_INTERVAL: Duration = Duration::from_secs(1 * 60);
 const REBOOTSTRAP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct BepRouter {
@@ -93,19 +97,45 @@ impl BepRouter {
         &self.host
     }
 
-    async fn dht_bootstrap(dht: &Arc<Kademlia>, addrs: &[SocketAddr]) -> bool {
+    async fn dht_bootstrap(
+        dht: &Arc<Kademlia>,
+        addrs: &[TorrentAddr],
+        resolver: &dyn AddressResolver,
+    ) -> bool {
         let mut futs: FuturesUnordered<_> = addrs
             .iter()
             .map(|addr| {
+                let addr = addr.to_string();
                 let dht = dht.clone();
-                let bootstrap = BootStrap::from_socket(*addr);
-                async move { dht.join_network(&bootstrap).await }
+
+                async move {
+                    let mut target_addr = addr;
+
+                    // HACK It needs to be abstracted and centralized
+                    if let NetworkEndpoint::I2P { socket, .. } =
+                        &dht.rpc_handler.connection_manager.endpoint
+                        && target_addr.contains("b32.i2p")
+                    {
+                        target_addr = socket.sam.get_b64_addr(&target_addr).await?;
+                    }
+
+                    match resolve_address(&target_addr, resolver) {
+                        Ok(addr_solved) => {
+                            let dht = dht.clone();
+                            let bootstrap = BootStrap::from_socket(addr_solved);
+
+                            Ok(dht.join_network(&bootstrap).await)
+                        }
+                        Err(e) => Err(anyhow::anyhow!("Resolution failed: {:?}", e)),
+                    }
+                }
             })
             .collect();
 
         while let Some(result) = futs.next().await {
-            if result.is_ok() {
-                return true;
+            match result {
+                Ok(_) => return true,
+                Err(_) => warn!("failed to bootstrap for the current session"),
             }
         }
 
@@ -128,7 +158,8 @@ impl BepRouter {
                     None => return,
                 };
 
-                if !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes).await {
+                let resolver = router.connection_manager.endpoint.resolver();
+                if !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes, &*resolver).await {
                     warn!("failed to bootstrap");
                 }
 
@@ -164,12 +195,14 @@ impl BepRouter {
                             continue;
                         };
 
-                        rebootstrap = !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes).await;
+                        let resolver = router.connection_manager.endpoint.resolver();
+                        rebootstrap = !Self::dht_bootstrap(&router.kademlia_dht, bootstrap_nodes, &*resolver).await;
                     },
                     _ = discovery_interval.tick() => {
                         let mut peers = Vec::new();
 
-                        match router.kademlia_dht.get_peers(&info_hash).await {
+                        let resolver = router.connection_manager.endpoint.resolver();
+                        match router.kademlia_dht.get_peers(&info_hash, &*resolver).await {
                             Ok(p) => peers.extend(p),
                             Err(_) => debug!("no peers on kademlia dht"),
                         }

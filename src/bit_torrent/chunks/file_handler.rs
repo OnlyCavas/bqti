@@ -239,39 +239,4 @@ impl Writer for MultiFileHandler<Downloading> {
 
         Ok(())
     }
-
-    // async fn write_piece(&self, index: u32, data: Vec<u8>) -> Result<(), ChunkHandlerError> {
-    //     let piece_start = index as Size * self.piece_length;
-    //     let piece_end = piece_start + data.len() as u64;
-    //
-    //     if piece_start >= self.total_length {
-    //         return Err(ChunkHandlerError::OutOfBounds(index));
-    //     }
-    //
-    //     let data = Arc::new(data);
-    //
-    //     for target in &self.targets {
-    //         let Some(overlap) =
-    //             Self::piece_overlap(target.start_byte, target.length, piece_start, piece_end)
-    //         else {
-    //             continue;
-    //         };
-    //
-    //         let handle = target.handle.clone();
-    //         let data = data.clone();
-    //
-    //         tokio::task::spawn_blocking(move || {
-    //             handle.write_at(
-    //                 &data[overlap.buffer_offset..overlap.buffer_offset + overlap.size],
-    //                 overlap.file_offset,
-    //             )?;
-    //
-    //             Ok::<(), io::Error>(())
-    //         })
-    //         .await
-    //         .map_err(|_| ChunkHandlerError::ThreadFailed())??;
-    //     }
-    //
-    //     Ok(())
-    // }
 }

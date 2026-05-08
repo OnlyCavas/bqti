@@ -16,13 +16,14 @@ use crate::dht::{
 #[allow(dead_code)]
 const REFRESH_BUCKET_INTERVAL: Duration = Duration::from_millis(50);
 
-const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(5);
+const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(30);
 
 #[async_trait]
 impl KademliaClient for Kademlia {
     async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
         let signed_secret = self.request_challange(bootstrap).await?;
         let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
+        info!("bootstrapped");
 
         self.acknowledge(&bootstrap).await;
 
@@ -76,7 +77,7 @@ impl Kademlia {
                 DhtRequest::RequestChallange {
                     sender_id: host_id.clone(),
                 },
-                Duration::from_secs(5),
+                TIMEOUT_EXCEPTION,
             )
             .await?;
 
@@ -119,7 +120,7 @@ impl Kademlia {
                     nonce: secret.nonce,
                     signature: signature,
                 },
-                Duration::from_secs(5),
+                TIMEOUT_EXCEPTION,
             )
             .await?;
 
@@ -248,7 +249,7 @@ impl Kademlia {
                 AuthDhtRequest::FindNode {
                     lookup_id: lookup_key,
                 },
-                Duration::from_secs(5),
+                TIMEOUT_EXCEPTION,
             )
             .await?;
 
@@ -283,7 +284,7 @@ impl Kademlia {
                     .auth_request(
                         &target,
                         AuthDhtRequest::Store { key, data: value },
-                        Duration::from_secs(5),
+                        TIMEOUT_EXCEPTION,
                     )
                     .await;
 
@@ -296,7 +297,7 @@ impl Kademlia {
                 Ok(DhtResponse::Pong {
                     receiver_id: sender_id,
                 }) if target.id == sender_id => {
-                    // info!("announce succedded");
+                    info!("announce succedded");
                 }
                 _ => {
                     {
@@ -353,7 +354,7 @@ impl Kademlia {
                         .auth_request(
                             &target,
                             AuthDhtRequest::FindValue { key: key.clone() },
-                            Duration::from_secs(5),
+                            TIMEOUT_EXCEPTION,
                         )
                         .await;
 

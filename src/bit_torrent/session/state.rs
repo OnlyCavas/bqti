@@ -219,7 +219,6 @@ impl TorrentState {
 
         async move {
             if let Some(path) = path {
-                info!("purging {:?}", path);
                 tokio::fs::remove_dir_all(path).await
             } else {
                 Ok(())

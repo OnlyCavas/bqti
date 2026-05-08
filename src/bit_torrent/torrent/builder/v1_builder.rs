@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{path::PathBuf, str::FromStr};
 
 use crate::{
     bit_torrent::{
@@ -13,6 +13,7 @@ use crate::{
         },
         types::ByteSize,
     },
+    torrent::metainfo::TorrentAddr,
     types::{PieceByte, UnixDate},
     utils::bqti,
 };
@@ -28,7 +29,7 @@ pub struct V1Builder {
     creation_date: Option<u64>,
     comment: Option<String>,
     created_by: Option<String>,
-    dht_nodes: Option<Vec<SocketAddr>>,
+    dht_nodes: Option<Vec<TorrentAddr>>,
 }
 
 #[allow(dead_code)]
@@ -107,7 +108,7 @@ impl V1Builder {
     pub fn dht_nodes(mut self, nodes: impl Into<Option<Vec<String>>>) -> Self {
         self.dht_nodes = nodes.into().map(|vec| {
             vec.into_iter()
-                .filter_map(|s| s.parse::<SocketAddr>().ok())
+                .filter_map(|s| TorrentAddr::from_str(&s).ok())
                 .collect()
         });
 

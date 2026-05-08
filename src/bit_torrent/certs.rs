@@ -66,7 +66,6 @@ impl KeyIdentity {
 
         Ok(Self {
             key_pair: key_pair,
-            // params,
             cert_der: cert.der().clone(),
         })
     }

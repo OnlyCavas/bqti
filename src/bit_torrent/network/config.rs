@@ -22,8 +22,14 @@ pub struct QuicEndpointBuilder {
 }
 
 #[derive(Debug)]
-struct NoVerifier {
+pub struct NoVerifier {
     crypto_provider: Arc<CryptoProvider>,
+}
+
+impl NoVerifier {
+    pub fn new(crypto_provider: Arc<CryptoProvider>) -> Self {
+        Self { crypto_provider }
+    }
 }
 
 impl ServerCertVerifier for NoVerifier {
@@ -85,11 +91,6 @@ impl QuicEndpointBuilder {
         }
     }
 
-    pub fn dangerous_no_cert_verify(mut self) -> Self {
-        self.skip_cert_verify = true;
-        self
-    }
-
     pub fn transport(mut self, config: quinn::TransportConfig) -> Self {
         self.transport_config = config;
         self
@@ -132,7 +133,12 @@ impl QuicEndpointBuilder {
         Ok(client_crypto)
     }
 
-    pub fn build(self) -> Result<quinn::Endpoint> {
+    pub fn dangerous_no_cert_verify(mut self) -> Self {
+        self.skip_cert_verify = true;
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<quinn::Endpoint> {
         let server_crypto = self.server_crypto()?;
         let client_crypto = self.client_crypto()?;
 
@@ -148,6 +154,7 @@ impl QuicEndpointBuilder {
         client_config.transport_config(transport);
 
         let mut endpoint = quinn::Endpoint::server(server_config, self.addr)?;
+
         endpoint.set_default_client_config(client_config);
 
         Ok(endpoint)
