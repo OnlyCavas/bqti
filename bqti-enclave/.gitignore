@@ -1,0 +1,7 @@
+# Build artifacts
+build/
+
+# clangd
+.cache/
+.clangd
+compile_commands.json

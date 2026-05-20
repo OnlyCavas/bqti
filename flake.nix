@@ -17,6 +17,7 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        pkgsRiscV = nixpkgs.legacyPackages.${system}.pkgsCross.riscv64;
 
         bqti = pkgs.rustPlatform.buildRustPackage {
           pname = "btqi";
@@ -34,6 +35,15 @@
           ];
         };
 
+        eapp = pkgsRiscV.stdenv.mkDerivation {
+          name = "bqti-eapp";
+          src = ./enclave/eapp;
+          buildPhase = ''
+            $CC bqti.c -I ${./keystone-sdk/include/app} -o bqti
+          '';
+          installPhase = "mkdir -p $out/bin && cp bqti $out/bin/";
+        };
+
       in
       {
         devShells.default = pkgs.mkShell {
@@ -44,13 +54,28 @@
           shellHook = "";
         };
 
-        packages.default = bqti;
+        packages = {
+          default = bqti;
+          inherit eapp;
+        };
 
         apps = {
 
           default = flake-utils.lib.mkApp {
             drv = bqti;
             name = "bqti";
+          };
+
+          comp-tee = {
+            type = "app";
+            program = toString (pkgs.writeShellScript "deploy" ''
+                cd bqti-enclave
+                ./build.sh
+                cd build && make bqti-package
+                cd ..
+                scp -O build/bqti.ke keystone-vm:/root/bqti.ke
+                echo "deployed"
+                '');
           };
 
           dev = {
