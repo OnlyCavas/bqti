@@ -13,6 +13,7 @@
 // CAPABILITIES
 #define OP_HASH 0x01 // Hashing a message
 #define OP_SIGN 0x02 // Signing with secret keypair
+#define OP_POW 0x03 // Trigger Proof of Work
 
 // CAPABILITIES RESPONSE VALUES
 #define ENCLAVE_OK              0
@@ -28,7 +29,7 @@
 // OCAL specifics
 #define OCALL_BQTI_RESULT 1
 
-typedef struct { uint8_t challange[32]; uint8_t difficulty; } pow_req_t;
+typedef struct { uint32_t challange; uint32_t difficulty; } pow_req_t;
 typedef struct { uint8_t message[32]; size_t message_len; } sign_req_t;
 typedef struct { uint8_t data[256]; size_t data_len; } hash_req_t;
 
@@ -42,7 +43,12 @@ typedef struct {
   };
 } enclave_req_t;
 
-typedef struct { uint64_t nonce; } pow_res_t;
+typedef struct {
+  uint32_t nonce;
+  uint8_t pow[HASH_LENGTH];
+  uint8_t pub_key[HASH_LENGTH];
+  uint8_t signature[SIGNATURE_LENGTH];
+} pow_res_t;
 
 typedef struct {
   uint8_t sig[SIGNATURE_LENGTH];

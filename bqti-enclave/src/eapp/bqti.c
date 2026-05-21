@@ -60,33 +60,106 @@ const uint8_t *enclave_pubkey(void) {
     return g_enclave_pk;
 }
 
+typedef struct {
+  uint8_t hash[HASH_LENGTH];
+  uint32_t challenge;
+  uint32_t nonce;
+  uint8_t sig[SIGNATURE_LENGTH];
+  uint32_t difficulty;
+} pow_ctx_t;
+
+pow_ctx_t pow_init(uint32_t challenge, uint32_t difficulty) {
+  return (pow_ctx_t){ .challenge = challenge, .difficulty = difficulty };
+}
+
+static bool meets_difficulty(const uint8_t hash[HASH_LENGTH], uint32_t difficulty) {
+    uint32_t full_bytes    = difficulty / 8;
+    uint32_t remaining_bits = difficulty % 8;
+
+    for (uint32_t i = 0; i < full_bytes; i++) {
+        if (hash[i] != 0) return false;
+    }
+
+    if (remaining_bits > 0) {
+        uint8_t mask = 0xFF << (8 - remaining_bits);
+        if ((hash[full_bytes] & mask) != 0) return false;
+    }
+
+    return true;
+}
+
+void pow_calculate(pow_ctx_t* ctx, const uint8_t pub_key[PUBKEY_LENGTH]) {
+  static hash_state pow_hash_state;
+
+  uint8_t hash[HASH_LENGTH];
+  uint32_t nonce = 0;
+
+  for (;;) {
+    sha256_init(&pow_hash_state);
+    sha256_process(&pow_hash_state, pub_key, PUBKEY_LENGTH);
+    sha256_process(&pow_hash_state, (const unsigned char *)&ctx->challenge, sizeof(ctx->challenge));
+    sha256_process(&pow_hash_state, (const unsigned char *)&nonce, sizeof(nonce));
+    sha256_done(&pow_hash_state, hash);
+
+    if (meets_difficulty(hash, ctx->difficulty)) {
+      break;
+    }
+
+    nonce++;
+  }
+
+  ctx->nonce = nonce;
+  memcpy(ctx->hash, hash, HASH_LENGTH);
+}
+
+void pow_sig(pow_ctx_t* pow) {
+  uint8_t signature[SIGNATURE_LENGTH];
+  enclave_sign(pow->hash, HASH_LENGTH, signature);
+  memcpy(pow->sig, signature, SIGNATURE_LENGTH);
+}
+
 int main(void) {
   struct edge_data retdata;
   ocall(OCALL_GET_REQUEST, NULL, 0, &retdata, sizeof(retdata));
   copy_from_shared(&g_request, retdata.offset, retdata.size);
 
+  enclave_init();
+
   g_response.op     = g_request.op;
   g_response.status = ENCLAVE_OK;
 
   switch (g_request.op) {
-    case OP_HASH:
+    case OP_HASH: {
 
       if (sha256_hash(g_request.hash.data, g_request.hash.data_len,
             g_response.hash.hash) != 0)
         g_response.status = ENCLAVE_ERR_HASH;
 
       break;
+    }
 
-    case OP_SIGN:
-      enclave_init();
-
+    case OP_SIGN: {
       enclave_sign(g_request.sign.message, g_request.sign.message_len,
           g_response.sign.sig);
 
       memcpy(g_response.sign.pb_key, enclave_pubkey(), PUBKEY_LENGTH);
 
-      enclave_destroy();
       break;
+    }
+
+    case OP_POW: {
+      pow_ctx_t pow_ctx = pow_init(g_request.pow.challange, g_request.pow.difficulty);
+
+      pow_calculate(&pow_ctx, enclave_pubkey());
+      pow_sig(&pow_ctx);
+
+      g_response.pow.nonce = pow_ctx.nonce;
+      memcpy(g_response.pow.pow, pow_ctx.hash, HASH_LENGTH);
+      memcpy(g_response.pow.signature, pow_ctx.sig, SIGNATURE_LENGTH);
+      memcpy(g_response.pow.pub_key, enclave_pubkey(), HASH_LENGTH);
+
+      break;
+    }
 
     default:
       g_response.status = ENCLAVE_ERR_INVALID_OP;
@@ -94,5 +167,6 @@ int main(void) {
 
   ocall(OCALL_SEND_RESULT, &g_response, sizeof(g_response), NULL, 0);
 
+  enclave_destroy();
   EAPP_RETURN(0);
 }

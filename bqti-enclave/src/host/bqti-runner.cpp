@@ -51,11 +51,9 @@ int main(int argc, char **argv) {
   Enclave enclave;
   Params params;
 
-  g_pending_req.op           = OP_SIGN;
-  const char *msg            = "ccd462209c7aea86babaf63f57dd7294caee390752dae424a662a1873c27c8d5";
-
-  memcpy(g_pending_req.sign.message, msg, strlen(msg));
-  g_pending_req.sign.message_len = strlen(msg);
+  g_pending_req.op = OP_POW;
+  g_pending_req.pow.challange = 0xDEADBEAF;
+  g_pending_req.pow.difficulty = 20;
 
   params.setFreeMemSize(4 * 1024 * 1024);
   params.setUntrustedSize(256 * 1024);
@@ -72,20 +70,21 @@ int main(int argc, char **argv) {
   enclave.run();
 
   printf("status: %d\n", g_received_res.status);
-  printf("Public Key: ");
-  print_hex(g_received_res.sign.pb_key, 32);
+  printf("Nonce: %d\n", g_received_res.pow.nonce);
+  printf("Proof of Work: ");
+  print_hex(g_received_res.pow.pow, HASH_LENGTH);
   printf("\n");
   printf("Signature: ");
-  print_hex(g_received_res.sign.sig, 64);
+  print_hex(g_received_res.pow.signature, SIGNATURE_LENGTH);
   printf("\n");
 
   printf("Verifying....\n");
 
   int valid = ed25519_verify(
-      (const unsigned char *)g_received_res.sign.sig,
-      (const unsigned char *)msg,
-      strlen(msg),
-      (const unsigned char *)g_received_res.sign.pb_key
+      (const unsigned char *)g_received_res.pow.signature,
+      (const unsigned char *)g_received_res.pow.pow,
+      HASH_LENGTH,
+      (const unsigned char *)g_received_res.pow.pub_key
   );
 
   printf("signature valid: %d\n", valid);
