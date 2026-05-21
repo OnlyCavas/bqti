@@ -4,30 +4,40 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include "app/eapp_utils.h"
 #include "app/sealing.h"
 #include "app/syscall.h"
+#include "edge/edge_common.h"
+
+#include "tomcrypt.h"
+#include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#include "monocypher.h"
-#include "psa/crypto.h"
-#include "psa/crypto_types.h"
+#include "protocol.h"
 
-#define HASH_LENGTH 32
-
-static uint8_t g_enclave_pk[32];
-static uint8_t g_enclave_sk[64];
+static uint8_t g_enclave_pk[PUBKEY_LENGTH];
+static uint8_t g_enclave_sk[SIGNATURE_LENGTH];
 static bool    g_initialized = false;
+
+static enclave_req_t g_request;
+static enclave_res_t g_response;
+
+static hash_state g_sha256_state;
+
+int sha256_hash(const uint8_t *input, size_t input_len, uint8_t hash[32]) {
+  sha256_init(&g_sha256_state);
+  sha256_process(&g_sha256_state, input, input_len);
+  sha256_done(&g_sha256_state, hash);
+
+  return 0;
+}
 
 static void enclave_init(void) {
   assert(!g_initialized);
 
-  psa_status_t s = psa_crypto_init();
-  assert(s == PSA_SUCCESS);
-
-  struct sealing_key sk;
+  static struct sealing_key sk;
   get_sealing_key(&sk, sizeof(sk), NULL, 0);
   crypto_ed25519_key_pair(g_enclave_sk, g_enclave_pk, sk.key);
-
   crypto_wipe(&sk, sizeof(sk));
 
   g_initialized = true;
@@ -49,35 +59,38 @@ const uint8_t *enclave_pubkey(void) {
     return g_enclave_pk;
 }
 
-int sha256_hash(const uint8_t *input, size_t input_len, uint8_t hash[32]) {
-  size_t hash_len;
-
-  psa_status_t s = psa_hash_compute(
-      PSA_ALG_SHA_256,
-      input, input_len,
-      hash, 32, &hash_len);
-
-  return s == PSA_SUCCESS ? 0 : -1;
-}
-
 int main(void) {
-  enclave_init();
+  struct edge_data retdata;
+  ocall(OCALL_GET_REQUEST, NULL, 0, &retdata, sizeof(retdata));
+  copy_from_shared(&g_request, retdata.offset, retdata.size);
 
-  const char *input = "Test Setup: BQTI within Enclave";
-  uint8_t hash[HASH_LENGTH];
-  sha256_hash((const uint8_t *)input, strlen(input), hash);
+  g_response.op     = g_request.op;
+  g_response.status = ENCLAVE_OK;
 
-  printf("String: %s\n", input);
+  switch (g_request.op) {
+    case OP_HASH:
 
-  printf("sha256: ");
-  for (size_t i = 0; i < HASH_LENGTH; i++) printf("%02x", hash[i]);
-  printf("\n");
+      if (sha256_hash(g_request.hash.data, g_request.hash.data_len,
+            g_response.hash.hash) != 0)
+        g_response.status = ENCLAVE_ERR_HASH;
 
-  const uint8_t *pk = enclave_pubkey();
-  printf("pubkey: ");
-  for (int i = 0; i < 32; i++) printf("%02x", pk[i]);
-  printf("\n");
+      break;
+    case OP_SIGN:
+      enclave_init();
 
-  enclave_destroy();
-  return 0;
+      enclave_sign(g_request.sign.message, g_request.sign.message_len,
+          g_response.sign.sig);
+
+      memcpy(g_response.sign.pb_key, enclave_pubkey(), PUBKEY_LENGTH);
+
+      enclave_destroy();
+
+      break;
+    default:
+      g_response.status = ENCLAVE_ERR_INVALID_OP;
+  }
+
+  ocall(OCALL_SEND_RESULT, &g_response, sizeof(g_response), NULL, 0);
+
+  EAPP_RETURN(0);
 }
