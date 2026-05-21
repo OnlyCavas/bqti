@@ -1,5 +1,5 @@
 [workspace]
-members = ["bqti-ipc"]
+members = ["bqti-ipc", "bqti-tee"]
 
 [workspace.package]
 version = "0.1.0"
@@ -60,3 +60,6 @@ indicatif = "0.18.4"
 console = "0.16.3"
 base64 = "0.22.1"
 data-encoding = "2.11.0"
+
+[target.'cfg(target_arch = "riscv64")'.dependencies]
+bqti-tee = { path = "bqti-tee", features = ["tee"] }

@@ -1,5 +1,6 @@
 # Rust
 target/
+.cargo/
 
 # --- User-Facing Results (Symlinks & .part files) ---
 # Ignore the symlinks and temporary files created in your dev folder

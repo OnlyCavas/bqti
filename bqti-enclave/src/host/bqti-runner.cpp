@@ -1,93 +1,43 @@
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-
-#include "edge/edge_call.h"
-#include "edge/edge_common.h"
-#include "host/Params.hpp"
-#include "host/keystone.h"
-
-#include "verifier/ed25519/ed25519.h"
-
+#include "enclave_ffi.h"
 #include "protocol.h"
-
-using namespace Keystone;
-
-static enclave_req_t g_pending_req;
-static enclave_res_t g_received_res;
+#include <cstdio>
 
 void print_hex(const uint8_t *data, size_t data_len) {
   for (int i = 0; i < data_len; i++) printf("%02x", data[i]);
 }
 
-static void handle_get_request(void *buffer) {
-  struct edge_call *ecall = (struct edge_call *)buffer;
-
-  size_t req_offset = sizeof(struct edge_call);
-  memcpy((uint8_t *)buffer + req_offset, &g_pending_req, sizeof(g_pending_req));
-
-  size_t edata_offset = req_offset + sizeof(g_pending_req);
-  struct edge_data *edata = (struct edge_data *)((uint8_t *)buffer + edata_offset);
-  edata->offset = req_offset;
-  edata->size   = sizeof(g_pending_req);
-
-  ecall->return_data.call_status     = CALL_STATUS_OK;
-  ecall->return_data.call_ret_offset = edata_offset;
-  ecall->return_data.call_ret_size   = sizeof(struct edge_data);
-}
-
-static void handle_send_result(void *buffer) {
-  struct edge_call *ec = (struct edge_call *)buffer;
-
-  memcpy(&g_received_res,
-      (uint8_t *)buffer + ec->call_arg_offset,
-      sizeof(g_received_res));
-
-  ec->return_data.call_status = CALL_STATUS_OK;
-}
-
 int main(int argc, char **argv) {
-  Enclave enclave;
-  Params params;
+  enclave_init(argv[1], argv[2], argv[3]);
 
-  g_pending_req.op = OP_POW;
-  g_pending_req.pow.challange = 0xDEADBEAF;
-  g_pending_req.pow.difficulty = 20;
+  pow_result_t result;
+  int status = enclave_run_pow(0xDEADBEEF, 20, &result);
 
-  params.setFreeMemSize(4 * 1024 * 1024);
-  params.setUntrustedSize(256 * 1024);
+  printf("Performing a Proof of Work Calculation\n");
 
-  enclave.init(argv[1], argv[2], argv[3], params);
-
-  enclave.registerOcallDispatch(incoming_call_dispatch);
-  edge_call_init_internals(
-      (uintptr_t)enclave.getSharedBuffer(), enclave.getSharedBufferSize());
-
-  edge_call_table[OCALL_GET_REQUEST] = handle_get_request;
-  edge_call_table[OCALL_SEND_RESULT] = handle_send_result;
-
-  enclave.run();
-
-  printf("status: %d\n", g_received_res.status);
-  printf("Nonce: %d\n", g_received_res.pow.nonce);
-  printf("Proof of Work: ");
-  print_hex(g_received_res.pow.pow, HASH_LENGTH);
-  printf("\n");
-  printf("Signature: ");
-  print_hex(g_received_res.pow.signature, SIGNATURE_LENGTH);
   printf("\n");
 
-  printf("Verifying....\n");
+  printf("PoW value: ");
+  print_hex(result.pow, HASH_LENGTH);
+  printf("\n");
 
-  int valid = ed25519_verify(
-      (const unsigned char *)g_received_res.pow.signature,
-      (const unsigned char *)g_received_res.pow.pow,
-      HASH_LENGTH,
-      (const unsigned char *)g_received_res.pow.pub_key
-  );
+  printf("\n");
+  printf("---- Values (pub_key | challenge | nonce) ----\n");
+  printf("\tPublic Key: ");
+  print_hex(result.pub_key, HASH_LENGTH);
+  printf("\n");
 
-  printf("signature valid: %d\n", valid);
+  printf("\n");
+  printf("\tChallenge: %u\n", 0xDEADBEEF);
+  printf("\tNonce: %u\n", result.nonce);
 
+  printf("\n");
+  printf("---- Signature ----\n");
+  print_hex(result.sig, SIGNATURE_LENGTH);
+  printf("\n-------------------\n");
+
+  printf("\n");
+  printf("status: %d\n", status);
+
+  enclave_destroy();
   return 0;
 }
