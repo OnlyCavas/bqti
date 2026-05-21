@@ -9,6 +9,7 @@ set(eapp_src src/eapp/bqti.c)
 
 set(host_bin bqti-runner)
 set(host_src src/host/bqti-runner.cpp)
+set(enclave_src src/host/enclave_ffi.cpp)
 set(package_name "bqti.ke")
 set(package_script "./bqti-runner bqti eyrie-rt loader.bin")
 set(eyrie_plugins "io_syscall linux_syscall env_setup")
@@ -41,11 +42,18 @@ target_include_directories(${eapp_bin} PUBLIC
   vendor/monocypher
   ${KEYSTONE_SDK_DIR}/include)
 
+# static lib for Rust FFI
+add_library(enclave-ffi STATIC ${enclave_src})
+target_link_libraries(enclave-ffi ${KEYSTONE_LIB_HOST} ${KEYSTONE_LIB_EDGE} ${KEYSTONE_LIB_VERIFIER})
+target_include_directories(enclave-ffi PUBLIC
+  include
+  src/shared
+  ${KEYSTONE_SDK_DIR}/include)
+
 # host
 add_executable(${host_bin} ${host_src})
-target_link_libraries(${host_bin} ${KEYSTONE_LIB_HOST} ${KEYSTONE_LIB_EDGE} ${KEYSTONE_LIB_VERIFIER})
-target_include_directories(${host_bin}
-  PUBLIC src/shared ${KEYSTONE_SDK_DIR}/include)
+target_link_libraries(${host_bin} enclave-ffi)
+target_include_directories(${host_bin} PUBLIC include src/shared ${KEYSTONE_SDK_DIR}/include)
 
 # eyrie runtime
 set(eyrie_files_to_copy .options_log eyrie-rt loader.bin)

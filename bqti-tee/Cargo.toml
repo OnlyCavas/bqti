@@ -1,0 +1,16 @@
+[package]
+name = "bqti-tee"
+version.workspace = true
+description.workspace = true
+edition.workspace = true
+
+[features]
+tee = []
+
+[build-dependencies]
+cc = "1.0"
+
+[dependencies]
+libc = { workspace = true }
+thiserror = { workspace = true }
+tempfile = "3.27.0"
