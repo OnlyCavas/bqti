@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include "verifier/ed25519/ed25519.h"
 #include "app/eapp_utils.h"
 #include "app/sealing.h"
 #include "app/syscall.h"
@@ -11,7 +12,6 @@
 
 #include "tomcrypt.h"
 #include "monocypher.h"
-#include "monocypher-ed25519.h"
 
 #include "protocol.h"
 
@@ -37,7 +37,8 @@ static void enclave_init(void) {
 
   static struct sealing_key sk;
   get_sealing_key(&sk, sizeof(sk), NULL, 0);
-  crypto_ed25519_key_pair(g_enclave_sk, g_enclave_pk, sk.key);
+
+  ed25519_create_keypair(g_enclave_pk, g_enclave_sk, sk.key);
   crypto_wipe(&sk, sizeof(sk));
 
   g_initialized = true;
@@ -51,7 +52,7 @@ static void enclave_destroy(void) {
 
 void enclave_sign(const uint8_t *msg, size_t msg_len, uint8_t sig[64]) {
     assert(g_initialized);
-    crypto_ed25519_sign(sig, g_enclave_sk, msg, msg_len);
+    ed25519_sign(sig, msg, msg_len, g_enclave_pk, g_enclave_sk);
 }
 
 const uint8_t *enclave_pubkey(void) {
@@ -75,6 +76,7 @@ int main(void) {
         g_response.status = ENCLAVE_ERR_HASH;
 
       break;
+
     case OP_SIGN:
       enclave_init();
 
@@ -84,8 +86,8 @@ int main(void) {
       memcpy(g_response.sign.pb_key, enclave_pubkey(), PUBKEY_LENGTH);
 
       enclave_destroy();
-
       break;
+
     default:
       g_response.status = ENCLAVE_ERR_INVALID_OP;
   }

@@ -16,6 +16,7 @@ set(eyrie_plugins "io_syscall linux_syscall env_setup")
 set(KEYSTONE_LIB_EAPP ${KEYSTONE_SDK_DIR}/lib/libkeystone-eapp.a)
 set(KEYSTONE_LIB_HOST ${KEYSTONE_SDK_DIR}/lib/libkeystone-host.a)
 set(KEYSTONE_LIB_EDGE ${KEYSTONE_SDK_DIR}/lib/libkeystone-edge.a)
+set(KEYSTONE_LIB_VERIFIER ${KEYSTONE_SDK_DIR}/lib/libkeystone-verifier.a)
 
 # libtomcrypt
 add_library(ltc_sha256 STATIC
@@ -34,17 +35,15 @@ target_compile_options(monocypher PRIVATE -ffunction-sections -fdata-sections)
 
 # eapp
 add_executable(${eapp_bin} ${eapp_src})
-target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} ltc_sha256 monocypher "-static" "-Wl,--gc-sections")
+target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} ${KEYSTONE_LIB_VERIFIER} ltc_sha256 monocypher "-static" "-Wl,--gc-sections")
 target_include_directories(${eapp_bin} PUBLIC
   src/shared
   vendor/monocypher
-  vendor/mbedtls/include
-  vendor/mbedtls/tf-psa-crypto/include
   ${KEYSTONE_SDK_DIR}/include)
 
 # host
 add_executable(${host_bin} ${host_src})
-target_link_libraries(${host_bin} ${KEYSTONE_LIB_HOST} ${KEYSTONE_LIB_EDGE})
+target_link_libraries(${host_bin} ${KEYSTONE_LIB_HOST} ${KEYSTONE_LIB_EDGE} ${KEYSTONE_LIB_VERIFIER})
 target_include_directories(${host_bin}
   PUBLIC src/shared ${KEYSTONE_SDK_DIR}/include)
 
