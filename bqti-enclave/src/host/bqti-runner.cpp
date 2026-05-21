@@ -1,3 +1,6 @@
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 #include "edge/edge_call.h"
@@ -5,12 +8,18 @@
 #include "host/Params.hpp"
 #include "host/keystone.h"
 
+#include "verifier/ed25519/ed25519.h"
+
 #include "protocol.h"
 
 using namespace Keystone;
 
 static enclave_req_t g_pending_req;
 static enclave_res_t g_received_res;
+
+void print_hex(const uint8_t *data, size_t data_len) {
+  for (int i = 0; i < data_len; i++) printf("%02x", data[i]);
+}
 
 static void handle_get_request(void *buffer) {
   struct edge_call *ecall = (struct edge_call *)buffer;
@@ -42,11 +51,11 @@ int main(int argc, char **argv) {
   Enclave enclave;
   Params params;
 
-  g_pending_req.op           = OP_HASH;
-  const char *msg            = "hello from host";
+  g_pending_req.op           = OP_SIGN;
+  const char *msg            = "ccd462209c7aea86babaf63f57dd7294caee390752dae424a662a1873c27c8d5";
 
-  memcpy(g_pending_req.hash.data, msg, strlen(msg));
-  g_pending_req.hash.data_len = strlen(msg);
+  memcpy(g_pending_req.sign.message, msg, strlen(msg));
+  g_pending_req.sign.message_len = strlen(msg);
 
   params.setFreeMemSize(4 * 1024 * 1024);
   params.setUntrustedSize(256 * 1024);
@@ -63,8 +72,23 @@ int main(int argc, char **argv) {
   enclave.run();
 
   printf("status: %d\n", g_received_res.status);
-  for (int i = 0; i < 32; i++) printf("%02x", g_received_res.hash.hash[i]);
+  printf("Public Key: ");
+  print_hex(g_received_res.sign.pb_key, 32);
   printf("\n");
+  printf("Signature: ");
+  print_hex(g_received_res.sign.sig, 64);
+  printf("\n");
+
+  printf("Verifying....\n");
+
+  int valid = ed25519_verify(
+      (const unsigned char *)g_received_res.sign.sig,
+      (const unsigned char *)msg,
+      strlen(msg),
+      (const unsigned char *)g_received_res.sign.pb_key
+  );
+
+  printf("signature valid: %d\n", valid);
 
   return 0;
 }

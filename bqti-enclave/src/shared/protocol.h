@@ -11,8 +11,8 @@
 #define OCALL_SEND_RESULT 2
 
 // CAPABILITIES
-#define OP_HASH 0x01
-#define OP_SIGN 0x02
+#define OP_HASH 0x01 // Hashing a message
+#define OP_SIGN 0x02 // Signing with secret keypair
 
 // CAPABILITIES RESPONSE VALUES
 #define ENCLAVE_OK              0
