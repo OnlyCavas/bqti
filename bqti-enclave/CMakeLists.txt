@@ -17,10 +17,13 @@ set(KEYSTONE_LIB_EAPP ${KEYSTONE_SDK_DIR}/lib/libkeystone-eapp.a)
 set(KEYSTONE_LIB_HOST ${KEYSTONE_SDK_DIR}/lib/libkeystone-host.a)
 set(KEYSTONE_LIB_EDGE ${KEYSTONE_SDK_DIR}/lib/libkeystone-edge.a)
 
-# mbedtls (SHA-256 only)
-set(ENABLE_TESTING  OFF CACHE BOOL "" FORCE)
-set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
-add_subdirectory(vendor/mbedtls)
+# libtomcrypt
+add_library(ltc_sha256 STATIC
+  vendor/libtomcrypt/src/hashes/sha2/sha256.c)
+target_compile_definitions(ltc_sha256 PUBLIC
+  LTC_SOURCE LTC_NOTHING LTC_SHA256 ARGTYPE=3 LTC_NO_TEST)
+target_include_directories(ltc_sha256 PUBLIC
+  vendor/libtomcrypt/src/headers)
 
 # monocypher
 add_library(monocypher STATIC
@@ -31,8 +34,9 @@ target_compile_options(monocypher PRIVATE -ffunction-sections -fdata-sections)
 
 # eapp
 add_executable(${eapp_bin} ${eapp_src})
-target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} tfpsacrypto monocypher "-static" "-Wl,--gc-sections")
+target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} ltc_sha256 monocypher "-static" "-Wl,--gc-sections")
 target_include_directories(${eapp_bin} PUBLIC
+  src/shared
   vendor/monocypher
   vendor/mbedtls/include
   vendor/mbedtls/tf-psa-crypto/include
@@ -42,7 +46,7 @@ target_include_directories(${eapp_bin} PUBLIC
 add_executable(${host_bin} ${host_src})
 target_link_libraries(${host_bin} ${KEYSTONE_LIB_HOST} ${KEYSTONE_LIB_EDGE})
 target_include_directories(${host_bin}
-  PUBLIC ${KEYSTONE_SDK_DIR}/include)
+  PUBLIC src/shared ${KEYSTONE_SDK_DIR}/include)
 
 # eyrie runtime
 set(eyrie_files_to_copy .options_log eyrie-rt loader.bin)

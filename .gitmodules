@@ -1,3 +1,0 @@
-[submodule "bqti-enclave/vendor/mbedtls"]
-	path = bqti-enclave/vendor/mbedtls
-	url = https://github.com/Mbed-TLS/mbedtls.git
