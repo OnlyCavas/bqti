@@ -25,7 +25,7 @@ use crate::{
     network::ConnectionManagerError,
     session::{
         BepId, BepRouterError, StandardMessage, TorrentSessionError,
-        bep::{BepRouter, PeerState, Pipeline},
+        bep::{BepRouter, PeerState, Pipeline, make_payload},
         bit_field::BitField,
         manager::SessionEvent,
         state::TorrentState,
@@ -336,6 +336,8 @@ impl TorrentSession {
             drop(state);
 
             let resources = Arc::new(resources);
+            let prover = session.bep_router.prover();
+
             debug!("started seeding...");
 
             loop {
@@ -351,11 +353,20 @@ impl TorrentSession {
                         }
                         Some(PieceRequest { index, respond }) => {
                             let resources = resources.clone();
+                            let prover = prover.clone();
 
                             tokio::spawn(async move {
                                 match resources.handler.read_piece(index).await {
                                     Ok(data) => {
-                                        let _ = respond.send(data);
+                                        let signed_payload = match make_payload(index, data, &*prover) {
+                                            Ok(s) => s,
+                                            Err(e) => {
+                                                warn!("failed to sign piece {}: {}", index, e);
+                                                return;
+                                            }
+                                        };
+
+                                        let _ = respond.send(signed_payload);
                                     }
                                     Err(e) => warn!("failed to read piece {}: {}", index, e),
                                 }
@@ -377,6 +388,7 @@ impl TorrentSession {
 
         Ok(())
     }
+
     pub async fn send_downloaded_piece(&self, index: u32, data: Vec<u8>) {
         self.pending_writes.fetch_add(1, Ordering::Relaxed);
 

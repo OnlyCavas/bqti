@@ -24,8 +24,14 @@ const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(30);
 #[async_trait]
 impl KademliaClient for Kademlia {
     async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
+        info!(
+            "attempting to join network on bootstrap {}",
+            bootstrap.node().addr
+        );
+
         let signed_secret = self.request_challange(bootstrap).await?;
         let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
+
         info!("bootstrapped");
 
         self.acknowledge(&bootstrap).await;
@@ -68,6 +74,7 @@ impl KademliaClient for Kademlia {
 impl Kademlia {
     async fn request_challange(&self, bootstrap: &BootStrap) -> Result<PoW, KademliaError> {
         let bootstrap = bootstrap.node();
+
         let host_id = {
             let route_table = self.route_table.read().await;
             route_table.host.id.clone()

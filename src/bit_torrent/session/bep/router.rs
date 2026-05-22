@@ -10,14 +10,17 @@ use crate::{
         pex::PexRouter,
         torrent::metainfo::{InfoHash, Metainfo},
     },
-    dht::{BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht},
+    certs::{ActiveKeyIdentity, PublicKey},
+    dht::{
+        ActiveProver, AuthManager, BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht,
+    },
     network::{
         AddressResolver, ConnectionManager, ConnectionManagerError, Message, NetworkEndpoint, Peer,
         resolve_address,
     },
     session::{
         StandardMessage, StandardMessageError,
-        bep::pipeline::BlockRequest,
+        bep::{piece_auth, pipeline::BlockRequest, verify_piece},
         session::{PieceRequest, TorrentSession},
         state::ActiveMode,
     },
@@ -57,6 +60,7 @@ const REBOOTSTRAP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct BepRouter {
     host: BepPeer,
+    auth: Arc<AuthManager>,
     connection_manager: Arc<ConnectionManager>,
 
     kademlia_dht: Arc<Kademlia>,
@@ -65,16 +69,18 @@ pub struct BepRouter {
 
 impl BepRouter {
     pub fn new(
-        pub_key: &[u8],
+        certificate: ActiveKeyIdentity,
         connection_manager: Arc<ConnectionManager>,
         kademlia_dht: Arc<Kademlia>,
         pex_router: Arc<PexRouter>,
     ) -> Result<Arc<Self>, BepRouterError> {
+        let public_key = certificate.pub_key().to_vec();
         let local_addr = connection_manager.get_local_ip()?;
 
         let router = Self {
+            auth: AuthManager::new(certificate),
             host: BepPeer {
-                id: pub_key.to_vec(),
+                id: public_key,
                 addr: local_addr,
             },
             connection_manager,
@@ -95,6 +101,10 @@ impl BepRouter {
 
     pub fn host(&self) -> &BepPeer {
         &self.host
+    }
+
+    pub fn prover(&self) -> Arc<ActiveProver> {
+        self.auth.prover().clone()
     }
 
     async fn dht_bootstrap(
@@ -252,6 +262,10 @@ impl BepRouter {
         session: Arc<TorrentSession>,
         peer: SocketAddr,
     ) -> Result<(), BepRouterError> {
+        self.connection_manager
+            .connect(&Peer::from_socket(peer))
+            .await?;
+
         session
             .insert_pending(peer, self.host.id.clone(), true)
             .await;
@@ -317,10 +331,11 @@ impl BepRouter {
                 pipeline.on_unchoke();
 
                 let requests = pipeline.fill_requests(None, &session).await;
+                let seeder_pub_key = pipeline.peer.id.clone();
 
                 let mut in_flight: FuturesUnordered<_> = requests
                     .into_iter()
-                    .map(|request| self.make_request(source, request))
+                    .map(|request| self.make_request(source, request, &seeder_pub_key))
                     .collect();
 
                 while let Some(result) = in_flight.next().await {
@@ -331,7 +346,7 @@ impl BepRouter {
                                 .await?;
 
                             for request in next {
-                                in_flight.push(self.make_request(source, request));
+                                in_flight.push(self.make_request(source, request, &seeder_pub_key));
                             }
                         }
                         Ok(_) => {}
@@ -439,6 +454,7 @@ impl BepRouter {
             return Ok(());
         }
 
+        session.insert_pending(source, peerid_recv, true).await;
         let bitfield_bits = session.get_bitfield().await.as_bytes().to_vec();
 
         self.send(source, StandardMessage::Bitfield(bitfield_bits))
@@ -491,6 +507,7 @@ impl BepRouter {
         &self,
         source: SocketAddr,
         request: BlockRequest,
+        seeder_key: &Key,
     ) -> impl std::future::Future<Output = Result<Option<StandardMessage>, BepRouterError>> {
         let connection_manager = self.connection_manager.clone();
 
@@ -499,11 +516,16 @@ impl BepRouter {
                 index: request.index,
             })?;
 
-            let data = connection_manager
+            let payload = connection_manager
                 .request(&Peer::from_socket(source), message)
                 .await?;
 
-            if data.is_empty() {
+            let Some((data, sig)) = piece_auth::split_payload(payload) else {
+                return Ok(None);
+            };
+
+            if !verify_piece(request.index, &data, &sig, seeder_key.pub_key()) {
+                debug!("piece {} sig verification failed", request.index);
                 return Ok(None);
             }
 
