@@ -7,7 +7,10 @@ use crate::{
     certs::ActiveKeyIdentity,
     dht::{
         Key, Node,
-        auth::{AuthError, Authorizable, ChallangeProof, Evidence, PoW, SecretSalt, Token},
+        auth::{
+            ActiveProver, AuthError, Authorizable, ChallangeProof, Evidence, PoW, SecretSalt,
+            Token, make_prover,
+        },
     },
     types::UnixDate,
     utils::bqti::fetch_current_timestamp,
@@ -19,7 +22,8 @@ const REQUEST_NUMBER: Requests = 100;
 const REQUEST_PER_SECOND: UnixDate = 60;
 
 pub struct AuthManager {
-    certificate: ActiveKeyIdentity,
+    certificate: Arc<ActiveKeyIdentity>,
+    prover: ActiveProver,
     secret_salt: RwLock<SecretSalt>,
     rate_limiter: RateLimiter,
     tokens: RwLock<Vec<Token>>,
@@ -27,11 +31,15 @@ pub struct AuthManager {
 
 impl AuthManager {
     pub fn new(certificate: ActiveKeyIdentity) -> Arc<Self> {
+        let certificate = Arc::new(certificate);
+        let prover = make_prover(certificate.clone());
+
         let auth_manager = Arc::new(Self {
             certificate,
             secret_salt: RwLock::new(SecretSalt::new()),
             rate_limiter: RateLimiter::new(REQUEST_NUMBER, REQUEST_PER_SECOND),
             tokens: RwLock::new(Vec::new()),
+            prover,
         });
 
         let weak_ptr = Arc::downgrade(&auth_manager);
@@ -65,7 +73,7 @@ impl AuthManager {
         }
 
         let mut token = Token::new(sender.id.pub_key(), secret.value);
-        token.sign(&self.certificate)?;
+        token.sign(&*self.certificate)?;
 
         Ok(token)
     }
@@ -88,6 +96,10 @@ impl AuthManager {
 
     pub fn certificate(&self) -> &ActiveKeyIdentity {
         &self.certificate
+    }
+
+    pub fn prover(&self) -> &ActiveProver {
+        &self.prover
     }
 
     pub async fn check_rate(&self, peer: &Key) -> Result<(), AuthError> {

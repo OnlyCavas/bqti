@@ -40,7 +40,7 @@ pub trait PublicKey {
     fn pub_key(&self) -> &[u8];
 }
 
-pub trait Signer: PublicKey {
+pub trait Signer: PublicKey + Send + Sync {
     fn sign(&self, data: &[u8]) -> Result<Signature, CertError>;
 }
 
