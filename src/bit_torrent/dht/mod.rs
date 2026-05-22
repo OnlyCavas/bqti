@@ -84,3 +84,5 @@ impl From<&InfoHash> for Key {
         Self::new(value.as_ref())
     }
 }
+
+pub use auth::{ActiveProver, AuthError, AuthManager, ProveChallenge};

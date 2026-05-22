@@ -23,7 +23,7 @@ const REQUEST_PER_SECOND: UnixDate = 60;
 
 pub struct AuthManager {
     certificate: Arc<ActiveKeyIdentity>,
-    prover: ActiveProver,
+    prover: Arc<ActiveProver>,
     secret_salt: RwLock<SecretSalt>,
     rate_limiter: RateLimiter,
     tokens: RwLock<Vec<Token>>,
@@ -39,7 +39,7 @@ impl AuthManager {
             secret_salt: RwLock::new(SecretSalt::new()),
             rate_limiter: RateLimiter::new(REQUEST_NUMBER, REQUEST_PER_SECOND),
             tokens: RwLock::new(Vec::new()),
-            prover,
+            prover: Arc::new(prover),
         });
 
         let weak_ptr = Arc::downgrade(&auth_manager);
@@ -98,8 +98,8 @@ impl AuthManager {
         &self.certificate
     }
 
-    pub fn prover(&self) -> &ActiveProver {
-        &self.prover
+    pub fn prover(&self) -> Arc<ActiveProver> {
+        self.prover.clone()
     }
 
     pub async fn check_rate(&self, peer: &Key) -> Result<(), AuthError> {

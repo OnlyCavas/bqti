@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     BitTorrentError,
     bit_torrent::{
-        certs::PublicKey,
         magnet::MagnetLink,
         pex::{PexMessage, PexRouter},
         torrent::metainfo::TorrentError,
@@ -191,7 +190,7 @@ impl Bqti {
 
         let pex_router = PexRouter::new(connection_manager.clone());
         let bep_router = BepRouter::new(
-            bep_cert.pub_key(),
+            bep_cert,
             connection_manager.clone(),
             kademlia.clone(),
             pex_router.clone(),

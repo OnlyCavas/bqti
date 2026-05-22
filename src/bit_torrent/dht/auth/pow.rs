@@ -36,6 +36,7 @@ pub struct SecretSalt(Hash32Bytes);
 
 pub trait ProveChallenge {
     fn prove(&self, public_key: &[u8], challenge: u32, difficulty: u32) -> Result<PoW, AuthError>;
+    fn sign(&self, data: &[u8]) -> Result<Signature, AuthError>;
 }
 
 #[cfg(not(feature = "tee"))]
@@ -76,6 +77,11 @@ impl ProveChallenge for SoftwareProver {
             nonce = nonce.wrapping_add(1);
         }
     }
+
+    fn sign(&self, data: &[u8]) -> Result<Signature, AuthError> {
+        let sig = self.signer.sign(data)?;
+        Ok(sig)
+    }
 }
 
 #[cfg(feature = "tee")]
@@ -104,6 +110,11 @@ impl ProveChallenge for TeeProver {
         };
 
         return Ok(pow);
+    }
+
+    fn sign(&self, data: &[u8]) -> Result<Signature, AuthError> {
+        let tee_sign = self.tee.sign(data)?;
+        Ok(tee_sign.to_vec())
     }
 }
 

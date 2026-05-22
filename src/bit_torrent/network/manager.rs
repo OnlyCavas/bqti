@@ -273,16 +273,12 @@ impl ConnectionManager {
         let peer_ip = peer_addr.ip();
         let local_ip = local_addr.ip();
 
-        peer_ip.is_loopback() || peer_ip == local_ip
+        peer_ip.is_loopback() || peer_ip.is_unspecified() || peer_ip == local_ip
     }
 
     pub async fn connect(&self, peer: &Peer) -> Result<(), ConnectionManagerError> {
         let peer_addr = peer.address;
-
-        let local_addr = self
-            .endpoint
-            .local_addr()
-            .map_err(|_| ConnectionManagerError::LocalIpError())?;
+        let local_addr = self.get_local_ip()?;
 
         if self.is_self_connection(&peer.address, &local_addr) {
             return Err(ConnectionManagerError::SelfConnectionError())?;
