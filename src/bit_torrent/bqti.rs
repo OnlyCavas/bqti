@@ -9,11 +9,12 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     BitTorrentError,
     bit_torrent::{
-        certs::{KeyIdentity, PublicKey},
+        certs::PublicKey,
         magnet::MagnetLink,
         pex::{PexMessage, PexRouter},
         torrent::metainfo::TorrentError,
     },
+    certs::{ActiveKeyIdentity, KeyIdentity},
     dht::{DhtPacket, Kademlia, RpcHandler, TorrentDht},
     ipc::server::{IpcCommandError, IpcServer},
     load,
@@ -180,7 +181,7 @@ impl Torrenting for Bqti {
 impl Bqti {
     pub fn new(
         connection_manager: Arc<ConnectionManager>,
-        certificate: KeyIdentity,
+        certificate: ActiveKeyIdentity,
     ) -> Result<Arc<Self>> {
         let kad_cert = certificate.leaf("dht certificate", true)?;
         let bep_cert = certificate.leaf("bep certificate", true)?;

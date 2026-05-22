@@ -1,4 +1,7 @@
-use std::{ffi::CString, fs};
+use std::{
+    ffi::{CString, c_void},
+    fs,
+};
 
 use tempfile::TempDir;
 use thiserror::Error;
@@ -14,6 +17,12 @@ pub enum TeeError {
 
     #[error("pow failed: {0}")]
     PowFailed(i32),
+
+    #[error("signature failed: {0}")]
+    SignatureFailed(i32),
+
+    #[error("fetch failed: {0}")]
+    PublicKeyFailed(i32),
 }
 
 pub struct PowResult {
@@ -23,10 +32,12 @@ pub struct PowResult {
     pub pub_key: [u8; 32],
 }
 
-type Result<T> = std::result::Result<T, TeeError>;
+pub type Result<T> = std::result::Result<T, TeeError>;
 
 pub trait TeeExecute {
     fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult>;
+    fn sign(&self, data: &[u8]) -> Result<[u8; 64]>;
+    fn get_pubkey(&self) -> Result<[u8; 32]>;
 }
 
 fn extract_enclave() -> TempDir {
@@ -37,6 +48,7 @@ fn extract_enclave() -> TempDir {
     dir
 }
 
+#[derive(Debug)]
 pub struct Tee {
     _dir: TempDir,
     eapp: CString,
@@ -58,17 +70,26 @@ impl Tee {
             loader,
         }
     }
-}
 
-impl TeeExecute for Tee {
-    fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult> {
+    fn enclave_init(&self) -> Result<()> {
         let inite_result = unsafe {
             ffi::enclave_init(self.eapp.as_ptr(), self.rt.as_ptr(), self.loader.as_ptr())
         };
 
-        if inite_result != 0 {
-            return Err(TeeError::InitFailed(inite_result));
+        match inite_result {
+            0 => Ok(()),
+            _ => Err(TeeError::InitFailed(inite_result)),
         }
+    }
+
+    fn enclave_drop(&self) {
+        unsafe { ffi::enclave_destroy() };
+    }
+}
+
+impl TeeExecute for Tee {
+    fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult> {
+        self.enclave_init()?;
 
         let mut out = ffi::PowResult {
             pow: [0u8; 32],
@@ -78,7 +99,7 @@ impl TeeExecute for Tee {
         };
 
         let pow_result = unsafe { ffi::enclave_run_pow(challenge, difficulty, &mut out) };
-        unsafe { ffi::enclave_destroy() };
+        self.enclave_drop();
 
         if pow_result != 0 {
             return Err(TeeError::PowFailed(pow_result));
@@ -90,5 +111,36 @@ impl TeeExecute for Tee {
             sig: out.sig,
             pub_key: out.pub_key,
         })
+    }
+
+    fn sign(&self, data: &[u8]) -> Result<[u8; 64]> {
+        let mut signature = [0u8; 64];
+
+        self.enclave_init()?;
+
+        let result = unsafe {
+            ffi::enclave_sign(data.as_ptr() as *const c_void, data.len(), &mut signature)
+        };
+
+        if result != 0 {
+            return Err(TeeError::SignatureFailed(result));
+        }
+
+        self.enclave_drop();
+        return Ok(signature);
+    }
+
+    fn get_pubkey(&self) -> Result<[u8; 32]> {
+        let mut pub_key = [0u8; 32];
+        self.enclave_init()?;
+
+        let result = unsafe { ffi::enclave_get_pubkey(&mut pub_key) };
+
+        if result != 0 {
+            return Err(TeeError::PublicKeyFailed(result));
+        }
+
+        self.enclave_drop();
+        return Ok(pub_key);
     }
 }

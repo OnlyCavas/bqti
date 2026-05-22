@@ -139,11 +139,13 @@ int main(void) {
     }
 
     case OP_SIGN: {
-      enclave_sign(g_request.sign.message, g_request.sign.message_len,
-          g_response.sign.sig);
+      enclave_sign(
+        g_request.sign.data,
+        g_request.sign.data_len,
+        g_response.sign.sig
+      );
 
       memcpy(g_response.sign.pb_key, enclave_pubkey(), PUBKEY_LENGTH);
-
       break;
     }
 
@@ -158,6 +160,11 @@ int main(void) {
       memcpy(g_response.pow.signature, pow_ctx.sig, SIGNATURE_LENGTH);
       memcpy(g_response.pow.pub_key, enclave_pubkey(), HASH_LENGTH);
 
+      break;
+    }
+
+    case OP_FETCH_PUBKEY: {
+      memcpy(g_response.pub_key.pub_key, enclave_pubkey(), PUBKEY_LENGTH);
       break;
     }
 

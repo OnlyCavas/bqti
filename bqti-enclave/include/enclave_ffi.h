@@ -1,4 +1,6 @@
 #pragma once
+#include <cstddef>
+#include <cstdint>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -15,6 +17,10 @@ extern "C" {
   int  enclave_init(const char *eapp_path, const char *runtime_path, const char *loader_path);
 
   int  enclave_run_pow(uint32_t challenge, uint32_t difficulty, pow_result_t *out);
+
+  int enclave_get_pubkey(uint8_t out[32]);
+
+  int enclave_sign(const void* data, size_t data_len, uint8_t out[64]);
 
   void enclave_destroy(void);
 

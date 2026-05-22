@@ -1,6 +1,7 @@
 # Rust
 target/
 .cargo/
+.rust-analyzer.toml
 
 # --- User-Facing Results (Symlinks & .part files) ---
 # Ignore the symlinks and temporary files created in your dev folder

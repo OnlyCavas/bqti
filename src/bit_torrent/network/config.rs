@@ -4,76 +4,27 @@ use quinn::{
     IdleTimeout,
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
 };
-use rustls::{
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::CryptoProvider,
-};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::{crypto::CryptoProvider, sign::CertifiedKey};
+use rustls_pki_types::CertificateDer;
 
 use anyhow::Result;
+
+use crate::certs::{NoVerifier, SingleCertResolver};
 
 pub struct QuicEndpointBuilder {
     addr: SocketAddr,
     transport_config: quinn::TransportConfig,
     crypto_provider: Arc<CryptoProvider>,
     certs: Vec<CertificateDer<'static>>,
-    priv_key: PrivateKeyDer<'static>,
+    certified_key: Arc<CertifiedKey>,
     skip_cert_verify: bool,
-}
-
-#[derive(Debug)]
-pub struct NoVerifier {
-    crypto_provider: Arc<CryptoProvider>,
-}
-
-impl NoVerifier {
-    pub fn new(crypto_provider: Arc<CryptoProvider>) -> Self {
-        Self { crypto_provider }
-    }
-}
-
-impl ServerCertVerifier for NoVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &rustls_pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls_pki_types::UnixTime,
-    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.crypto_provider
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
 }
 
 impl QuicEndpointBuilder {
     pub fn new(
         addr: SocketAddr,
         certs: Vec<CertificateDer<'static>>,
-        priv_key: PrivateKeyDer<'static>,
+        certified_key: Arc<CertifiedKey>,
     ) -> Self {
         let mut transport_config = quinn::TransportConfig::default();
 
@@ -86,7 +37,7 @@ impl QuicEndpointBuilder {
             transport_config,
             crypto_provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
             certs,
-            priv_key,
+            certified_key,
             skip_cert_verify: false,
         }
     }
@@ -96,15 +47,14 @@ impl QuicEndpointBuilder {
         self
     }
 
-    fn server_crypto(&self) -> Result<rustls::ServerConfig> {
+    fn server_crypto(&self) -> anyhow::Result<rustls::ServerConfig> {
         let mut server_crypto =
             rustls::ServerConfig::builder_with_provider(self.crypto_provider.clone())
                 .with_safe_default_protocol_versions()?
                 .with_no_client_auth()
-                .with_single_cert(self.certs.clone(), self.priv_key.clone_key())?;
+                .with_cert_resolver(Arc::new(SingleCertResolver(self.certified_key.clone())));
 
         server_crypto.alpn_protocols = vec![b"bittorrent-quic".to_vec()];
-
         Ok(server_crypto)
     }
 
@@ -115,9 +65,9 @@ impl QuicEndpointBuilder {
         let mut client_crypto = if self.skip_cert_verify {
             builder
                 .dangerous()
-                .with_custom_certificate_verifier(Arc::new(NoVerifier {
-                    crypto_provider: self.crypto_provider.clone(),
-                }))
+                .with_custom_certificate_verifier(Arc::new(NoVerifier::new(
+                    self.crypto_provider.clone(),
+                )))
                 .with_no_client_auth()
         } else {
             let mut root_store = rustls::RootCertStore::empty();

@@ -6,7 +6,7 @@ mod message;
 mod peer;
 mod resolver;
 
-pub use config::{NoVerifier, QuicEndpointBuilder};
+pub use config::QuicEndpointBuilder;
 pub use connection::{Connection, ConnectionError, OnDisconnect, QuicServerOpts};
 pub use endpoint::NetworkEndpoint;
 pub use manager::{ConnectionManager, ConnectionManagerError, ManagerOptions};

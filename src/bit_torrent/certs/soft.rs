@@ -1,53 +1,28 @@
-use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, SignatureAlgorithm};
+#[cfg(not(feature = "tee"))]
+use std::sync::Arc;
+
+#[cfg(not(feature = "tee"))]
+use rcgen::Issuer;
+use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 use ring::signature::{self, Ed25519KeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
-use thiserror::Error;
 
-const DEFAULT_SIGN_ALGORITM: &SignatureAlgorithm = &rcgen::PKCS_ED25519;
+#[cfg(not(feature = "tee"))]
+use crate::certs::{ActiveKeyIdentity, KeyIdentity};
+use crate::certs::{CertError, DEFAULT_SIGN_ALGORITM, PublicKey, Signature, Signer, Verifier};
 
-pub type Signature = Vec<u8>;
-
-#[derive(Debug, Error)]
-pub enum CertError {
-    #[error("failed to create certificate")]
-    Failed(),
-
-    #[error(transparent)]
-    Rcgen(#[from] rcgen::Error),
-}
-
-pub trait PublicKey {
-    fn pub_key(&self) -> &[u8];
-}
-
-pub trait Signer: PublicKey {
-    fn sign(&self, data: &[u8]) -> Result<Signature, CertError>;
-}
-
-pub trait Verifier {
-    fn verify(pub_key: &[u8], data: &[u8], signature: &[u8]) -> bool;
-}
-
-pub struct KeyIdentity {
+pub struct SoftwareKeyIdentity {
     key_pair: KeyPair,
     cert_der: CertificateDer<'static>,
 }
 
-impl KeyIdentity {
+impl SoftwareKeyIdentity {
     pub fn from_bytes_der(cert_bytes: &[u8], priv_key_bytes: &[u8]) -> Result<Self, CertError> {
         let priv_key_der = PrivateKeyDer::Pkcs8(priv_key_bytes.to_vec().into());
         let key_pair = KeyPair::from_der_and_sign_algo(&priv_key_der, DEFAULT_SIGN_ALGORITM)?;
         let cert_der = CertificateDer::from(cert_bytes.to_vec());
 
         Ok(Self { key_pair, cert_der })
-    }
-
-    pub fn cert_der(&self) -> CertificateDer<'static> {
-        return self.cert_der.clone();
-    }
-
-    pub fn key_der(&self) -> PrivateKeyDer<'static> {
-        return PrivateKeyDer::Pkcs8(self.key_pair.serialize_der().into());
     }
 
     pub fn to_bytes_der(&self) -> (Vec<u8>, Vec<u8>) {
@@ -69,8 +44,11 @@ impl KeyIdentity {
             cert_der: cert.der().clone(),
         })
     }
+}
 
-    pub fn leaf(&self, common_name: &str, as_ca: bool) -> Result<Self, CertError> {
+#[cfg(not(feature = "tee"))]
+impl KeyIdentity for SoftwareKeyIdentity {
+    fn leaf(&self, common_name: &str, as_ca: bool) -> Result<ActiveKeyIdentity, CertError> {
         let mut params = CertificateParams::new(vec![common_name.to_string()])?;
         params.is_ca = if as_ca {
             IsCa::Ca(BasicConstraints::Unconstrained)
@@ -88,9 +66,21 @@ impl KeyIdentity {
             cert_der: leaf_cert.der().clone(),
         })
     }
+
+    fn cert_der(&self) -> CertificateDer<'static> {
+        return self.cert_der.clone();
+    }
+
+    fn certified_key(&self) -> Arc<rustls::sign::CertifiedKey> {
+        let key_der = PrivateKeyDer::Pkcs8(self.key_pair.serialize_der().into());
+        let key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key_der)
+            .expect("valid Ed25519 key");
+
+        Arc::new(rustls::sign::CertifiedKey::new(vec![self.cert_der()], key))
+    }
 }
 
-impl Signer for KeyIdentity {
+impl Signer for SoftwareKeyIdentity {
     fn sign(&self, data: &[u8]) -> Result<Signature, CertError> {
         let pkcs8_key = self.key_pair.serialize_der();
 
@@ -103,14 +93,14 @@ impl Signer for KeyIdentity {
     }
 }
 
-impl Verifier for KeyIdentity {
+impl Verifier for SoftwareKeyIdentity {
     fn verify(pub_key: &[u8], data: &[u8], signature: &[u8]) -> bool {
         let pub_key = signature::UnparsedPublicKey::new(&signature::ED25519, pub_key);
         pub_key.verify(data, signature).is_ok()
     }
 }
 
-impl PublicKey for KeyIdentity {
+impl PublicKey for SoftwareKeyIdentity {
     fn pub_key(&self) -> &[u8] {
         self.key_pair.public_key_raw()
     }

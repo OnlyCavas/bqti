@@ -1,12 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
 use quinn::{Endpoint, EndpointConfig, ServerConfig};
-use rustls::crypto::CryptoProvider;
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::{crypto::CryptoProvider, sign::CertifiedKey};
+use rustls_pki_types::CertificateDer;
 
 use crate::{
+    certs::{NoVerifier, SingleCertResolver},
     i2p::{I2pDatagramSocket, SamSession, dest_map::DestMap},
-    network::NoVerifier,
 };
 
 type I2pEndpoint = (quinn::Endpoint, Arc<I2pDatagramSocket>);
@@ -14,17 +14,17 @@ type I2pEndpoint = (quinn::Endpoint, Arc<I2pDatagramSocket>);
 pub struct I2pEndpointBuilder {
     crypto_provider: Arc<CryptoProvider>,
     certs: Vec<CertificateDer<'static>>,
-    priv_key: PrivateKeyDer<'static>,
+    certified_key: Arc<CertifiedKey>,
 
     skip_cert_verify: bool,
 }
 
 impl I2pEndpointBuilder {
-    pub fn new(certs: Vec<CertificateDer<'static>>, priv_key: PrivateKeyDer<'static>) -> Self {
+    pub fn new(certs: Vec<CertificateDer<'static>>, certified_key: Arc<CertifiedKey>) -> Self {
         Self {
             crypto_provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
             certs,
-            priv_key,
+            certified_key,
             skip_cert_verify: false,
         }
     }
@@ -39,10 +39,9 @@ impl I2pEndpointBuilder {
             rustls::ServerConfig::builder_with_provider(self.crypto_provider.clone())
                 .with_safe_default_protocol_versions()?
                 .with_no_client_auth()
-                .with_single_cert(self.certs.clone(), self.priv_key.clone_key())?;
+                .with_cert_resolver(Arc::new(SingleCertResolver(self.certified_key.clone())));
 
         server_crypto.alpn_protocols = vec![b"bittorrent-quic".to_vec()];
-
         Ok(server_crypto)
     }
 
