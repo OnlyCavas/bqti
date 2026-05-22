@@ -116,8 +116,7 @@ fn main() {
     .unwrap();
     writeln!(
         f,
-        "pub static ENCLAVE_LOADER: &[u8] =
-  include_bytes!(\"{out}/loader.bin\");"
+        "pub static ENCLAVE_LOADER: &[u8] = include_bytes!(\"{out}/loader.bin\");"
     )
     .unwrap();
 }

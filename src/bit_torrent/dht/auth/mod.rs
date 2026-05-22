@@ -1,3 +1,6 @@
+#[cfg(feature = "tee")]
+use bqti_tee::TeeError;
+
 use thiserror::Error;
 
 mod manager;
@@ -6,14 +9,10 @@ mod token;
 
 pub use manager::AuthManager;
 
-use crate::{bit_torrent::certs::Signer, types::UnixDate};
+use crate::{bit_torrent::certs::Signer, certs::CertError, types::UnixDate};
 
 pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
 pub const DIFFICULTY: u32 = 16;
-
-pub trait Challenge {
-    fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> Self;
-}
 
 pub trait Evidence {
     fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError>;
@@ -42,6 +41,13 @@ pub enum AuthError {
 
     #[error("rate limit exceeded")]
     RateLimited(),
+
+    #[error("failed to sign proof of work")]
+    PowSignFailed(#[from] CertError),
+
+    #[cfg(feature = "tee")]
+    #[error(transparent)]
+    TeeError(#[from] TeeError),
 }
 
 pub use pow::*;

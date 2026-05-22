@@ -4,13 +4,16 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::time::sleep;
 
-use crate::dht::{
-    BootStrap, DhtResponse, Kademlia, KademliaData, KademliaError, Key, Node, OrdDistance,
-    RpcError,
-    auth::{AuthError, Authorizable, Challenge, Evidence, PoW},
-    kademlia::KademliaClient,
-    message::{AuthDhtRequest, DhtRequest},
-    route_table::KBUCKET_MAX,
+use crate::{
+    certs::PublicKey,
+    dht::{
+        BootStrap, DhtResponse, Kademlia, KademliaData, KademliaError, Key, Node, OrdDistance,
+        RpcError,
+        auth::{AuthError, Authorizable, PoW, ProveChallenge},
+        kademlia::KademliaClient,
+        message::{AuthDhtRequest, DhtRequest},
+        route_table::KBUCKET_MAX,
+    },
 };
 
 #[allow(dead_code)]
@@ -89,8 +92,10 @@ impl Kademlia {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
-        let mut secret = PoW::generate(host_id.pub_key(), challange, difficulty);
-        secret.sign(self.auth.certificate())?;
+        let secret =
+            self.auth
+                .prover()
+                .prove(self.auth.certificate().pub_key(), challange, difficulty)?;
 
         Ok(secret)
     }
