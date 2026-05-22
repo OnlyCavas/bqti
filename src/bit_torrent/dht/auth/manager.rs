@@ -3,7 +3,8 @@ use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
 use tokio::{sync::RwLock, time::sleep};
 
 use crate::{
-    bit_torrent::certs::{KeyIdentity, PublicKey},
+    bit_torrent::certs::PublicKey,
+    certs::ActiveKeyIdentity,
     dht::{
         Key, Node,
         auth::{AuthError, Authorizable, ChallangeProof, Evidence, PoW, SecretSalt, Token},
@@ -18,14 +19,14 @@ const REQUEST_NUMBER: Requests = 100;
 const REQUEST_PER_SECOND: UnixDate = 60;
 
 pub struct AuthManager {
-    certificate: KeyIdentity,
+    certificate: ActiveKeyIdentity,
     secret_salt: RwLock<SecretSalt>,
     rate_limiter: RateLimiter,
     tokens: RwLock<Vec<Token>>,
 }
 
 impl AuthManager {
-    pub fn new(certificate: KeyIdentity) -> Arc<Self> {
+    pub fn new(certificate: ActiveKeyIdentity) -> Arc<Self> {
         let auth_manager = Arc::new(Self {
             certificate,
             secret_salt: RwLock::new(SecretSalt::new()),
@@ -85,7 +86,7 @@ impl AuthManager {
         held.iter().find(|t| !t.is_expired()).cloned()
     }
 
-    pub fn certificate(&self) -> &KeyIdentity {
+    pub fn certificate(&self) -> &ActiveKeyIdentity {
         &self.certificate
     }
 

@@ -10,7 +10,7 @@ mod manager;
 pub use manager::AuthManager;
 
 use crate::{
-    bit_torrent::certs::{KeyIdentity, Signature, Signer, Verifier},
+    bit_torrent::certs::{Signature, Signer, SoftwareKeyIdentity, Verifier},
     dht::Key,
     types::{Hash32Bytes, UnixDate},
     utils::bqti::fetch_current_timestamp,
@@ -131,7 +131,7 @@ impl Authorizable for Token {
         };
 
         let secret = self.calculate_hash(&self.issuer);
-        KeyIdentity::verify(&self.issuer, &secret, &signature)
+        SoftwareKeyIdentity::verify(&self.issuer, &secret, &signature)
     }
 
     fn is_expired(&self) -> bool {
@@ -282,6 +282,6 @@ impl ChallangeProof for PoW {
             return false;
         }
 
-        KeyIdentity::verify(pub_key, &self.value, &signature)
+        SoftwareKeyIdentity::verify(pub_key, &self.value, &signature)
     }
 }

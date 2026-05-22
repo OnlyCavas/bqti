@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    bit_torrent::certs::KeyIdentity,
+    bit_torrent::certs::SoftwareKeyIdentity,
     utils::bqti::{certs_dir, ensure_dir},
 };
 
@@ -33,7 +33,7 @@ impl Default for CertOptions {
 }
 
 pub async fn store_cert(
-    cert: &KeyIdentity,
+    cert: &SoftwareKeyIdentity,
     cert_name: &str,
     priv_key: &str,
     options: &CertOptions,
@@ -56,7 +56,7 @@ pub async fn read_cert(
     cert_name: &str,
     priv_key: &str,
     options: &CertOptions,
-) -> Result<KeyIdentity> {
+) -> Result<SoftwareKeyIdentity> {
     let dir = options.resolve_dir()?;
     let ca_path = dir.join(cert_name);
     let pk_path = dir.join(priv_key);
@@ -71,10 +71,10 @@ pub async fn read_cert(
         .await
         .with_context(|| format!("failed to read key: {}", pk_path.display()))?;
 
-    KeyIdentity::from_bytes_der(&ca, &pk).map_err(Into::into)
+    SoftwareKeyIdentity::from_bytes_der(&ca, &pk).map_err(Into::into)
 }
 
-pub async fn make_ca_root() -> Result<KeyIdentity> {
+pub async fn make_ca_root() -> Result<SoftwareKeyIdentity> {
     let ca_path = "ca.der";
     let pk_path = "root_pk.der";
 
@@ -83,7 +83,7 @@ pub async fn make_ca_root() -> Result<KeyIdentity> {
     match ca_root {
         Ok(certificate) => Ok(certificate),
         Err(_) => {
-            let ca_root = KeyIdentity::root("BQTI - Certificate")?;
+            let ca_root = SoftwareKeyIdentity::root("BQTI - Certificate")?;
             store_cert(&ca_root, ca_path, pk_path, &CertOptions::default()).await?;
 
             Ok(ca_root)

@@ -14,6 +14,7 @@
 #define OP_HASH 0x01 // Hashing a message
 #define OP_SIGN 0x02 // Signing with secret keypair
 #define OP_POW 0x03 // Trigger Proof of Work
+#define OP_FETCH_PUBKEY 0x04 // FETCH Tee's pub key
 
 // CAPABILITIES RESPONSE VALUES
 #define ENCLAVE_OK              0
@@ -29,8 +30,10 @@
 // OCAL specifics
 #define OCALL_BQTI_RESULT 1
 
+#define DATA_MAX_LENGTH 1024
+
 typedef struct { uint32_t challange; uint32_t difficulty; } pow_req_t;
-typedef struct { uint8_t message[32]; size_t message_len; } sign_req_t;
+typedef struct { uint8_t data[DATA_MAX_LENGTH]; size_t data_len; } sign_req_t;
 typedef struct { uint8_t data[256]; size_t data_len; } hash_req_t;
 
 typedef struct {
@@ -56,6 +59,7 @@ typedef struct {
 } sign_res_t;
 
 typedef struct { uint8_t hash[HASH_LENGTH]; } hash_res_t;
+typedef struct { uint8_t pub_key[PUBKEY_LENGTH]; } pubkey_res_t;
 
 typedef struct {
   uint32_t op;
@@ -65,6 +69,7 @@ typedef struct {
     pow_res_t pow;
     sign_res_t sign;
     hash_res_t hash;
+    pubkey_res_t pub_key;
   };
 } enclave_res_t;
 

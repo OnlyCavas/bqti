@@ -24,6 +24,9 @@ name = "bqti"
 version.workspace = true
 edition.workspace = true
 
+[features]
+tee = ["dep:bqti-tee"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
@@ -62,4 +65,4 @@ base64 = "0.22.1"
 data-encoding = "2.11.0"
 
 [target.'cfg(target_arch = "riscv64")'.dependencies]
-bqti-tee = { path = "bqti-tee", features = ["tee"] }
+bqti-tee = { path = "bqti-tee", features = ["tee"], optional = true }

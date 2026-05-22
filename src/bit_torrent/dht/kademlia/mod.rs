@@ -5,7 +5,8 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 
 use crate::{
-    bit_torrent::certs::{CertError, KeyIdentity, PublicKey},
+    bit_torrent::certs::{CertError, PublicKey},
+    certs::ActiveKeyIdentity,
     dht::{
         BootStrap, DhtPacket, Key, Node, RpcError,
         auth::{AuthError, AuthManager},
@@ -72,7 +73,7 @@ pub struct Kademlia {
 impl Kademlia {
     pub fn new(
         rpc_handler: Arc<RpcHandler>,
-        certificate: KeyIdentity,
+        certificate: ActiveKeyIdentity,
     ) -> Result<Arc<Self>, KademliaError> {
         let local_addr = rpc_handler.get_local_addr()?;
         let host = Node::from_socket(Key::new(certificate.pub_key()), local_addr);

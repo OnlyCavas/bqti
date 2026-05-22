@@ -4,7 +4,10 @@ use bqti_ipc::{Torrent, TorrentState};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::{certs::KeyIdentity, cli::CertType};
+use crate::{
+    certs::{ActiveKeyIdentity, KeyIdentity},
+    cli::CertType,
+};
 
 const SPINNER_TICK_DURATION: Duration = Duration::from_millis(80);
 
@@ -206,12 +209,12 @@ pub fn verify_pieces_bar(total_pieces: u32, name: &str) -> ProgressBar {
 pub fn print_certs(
     kind: &CertType,
     dir: &Path,
-    identity: &KeyIdentity,
-    leaf: Option<&KeyIdentity>,
+    identity: &ActiveKeyIdentity,
+    leaf: Option<&ActiveKeyIdentity>,
 ) {
     use ring::digest::{SHA256, digest};
 
-    let fingerprint = |id: &KeyIdentity| {
+    let fingerprint = |id: &ActiveKeyIdentity| {
         let der = id.cert_der();
         let hash = digest(&SHA256, &der);
         hash.as_ref()

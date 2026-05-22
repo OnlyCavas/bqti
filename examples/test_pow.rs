@@ -4,6 +4,8 @@ fn main() {
         use bqti_tee::TeeExecute;
         let tee = bqti_tee::Tee::new();
 
+        println!("testing pow calculation");
+
         match tee.pow(42, 10) {
             Ok(r) => {
                 println!("nonce:   {}", r.nonce);
@@ -12,7 +14,32 @@ fn main() {
                 println!("sig:     {}", hex::encode(&r.sig));
             }
             Err(e) => eprintln!("error: {}", e),
-        }
+        };
+
+        println!("");
+
+        let pub_key = match tee.get_pubkey() {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return;
+            }
+        };
+
+        println!("{}", hex::encode(pub_key));
+
+        println!("");
+
+        let data = [1u8; 64];
+        let signature = match tee.sign(&data) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return;
+            }
+        };
+
+        println!("{}", hex::encode(signature));
     }
 
     #[cfg(not(target_arch = "riscv64"))]

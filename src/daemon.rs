@@ -1,14 +1,27 @@
 use anyhow::Context;
 
 use crate::{
-    Bqti, EndpointBuilder, i2p,
+    Bqti, EndpointBuilder,
+    certs::{ActiveKeyIdentity, KeyIdentity},
+    i2p,
     network::{ConnectionManager, ManagerOptions, Peer, QuicEndpointBuilder},
-    utils,
 };
 
 pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Result<()> {
     let my_self = Peer::new("localhost", &addr)?;
-    let ca_root = utils::certs::make_ca_root().await?;
+
+    let ca_root: ActiveKeyIdentity = {
+        #[cfg(feature = "tee")]
+        {
+            use crate::certs::TeeKeyIdentity;
+            TeeKeyIdentity::new()?
+        }
+        #[cfg(not(feature = "tee"))]
+        {
+            use crate::utils;
+            utils::certs::make_ca_root().await?
+        }
+    };
 
     let leaf_quic = ca_root.leaf("localhost", false)?;
     let leaf_kademlia = ca_root.leaf("kademlia", false)?;
@@ -17,7 +30,7 @@ pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Res
         true => {
             let endpoint_config = i2p::I2pEndpointBuilder::new(
                 vec![leaf_quic.cert_der(), ca_root.cert_der()],
-                leaf_quic.key_der(),
+                leaf_quic.certified_key(),
             );
 
             EndpointBuilder::I2p(endpoint_config)
@@ -26,7 +39,7 @@ pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Res
             let endpoint_config = QuicEndpointBuilder::new(
                 my_self.address,
                 vec![leaf_quic.cert_der(), ca_root.cert_der()],
-                leaf_quic.key_der(),
+                leaf_quic.certified_key(),
             );
 
             EndpointBuilder::Quic(endpoint_config)

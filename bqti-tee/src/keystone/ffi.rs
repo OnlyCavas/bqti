@@ -1,4 +1,6 @@
-use std::ffi::{c_char, c_int, c_uint};
+use std::ffi::{c_char, c_int, c_uint, c_void};
+
+use libc::size_t;
 
 #[repr(C)]
 pub struct PowResult {
@@ -20,6 +22,10 @@ unsafe extern "C" {
         difficulty: c_uint,
         out: *mut PowResult,
     ) -> c_int;
+
+    pub unsafe fn enclave_get_pubkey(out: &mut [u8; 32]) -> c_int;
+
+    pub unsafe fn enclave_sign(data: *const c_void, data_len: size_t, out: &mut [u8; 64]) -> c_int;
 
     pub unsafe fn enclave_destroy();
 }
