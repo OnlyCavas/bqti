@@ -6,6 +6,11 @@ use std::{
 use tempfile::TempDir;
 use thiserror::Error;
 
+use crate::{
+    KeystoneAttestReport,
+    keystone::ffi::{ATTEST_REPORT_SIZE, AttestReport},
+};
+
 mod ffi;
 
 include!(concat!(env!("OUT_DIR"), "/enclave_assets.rs"));
@@ -23,6 +28,9 @@ pub enum TeeError {
 
     #[error("fetch failed: {0}")]
     PublicKeyFailed(i32),
+
+    #[error("attestation failed: {0}")]
+    AttestFailed(i32),
 }
 
 pub struct PowResult {
@@ -38,6 +46,7 @@ pub trait TeeExecute {
     fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult>;
     fn sign(&self, data: &[u8]) -> Result<[u8; 64]>;
     fn get_pubkey(&self) -> Result<[u8; 32]>;
+    fn attest(&self, nonce: &[u8]) -> Result<crate::AttestReport>;
 }
 
 fn extract_enclave() -> TempDir {
@@ -143,4 +152,46 @@ impl TeeExecute for Tee {
         self.enclave_drop();
         return Ok(pub_key);
     }
+
+    fn attest(&self, nonce: &[u8]) -> Result<crate::AttestReport> {
+        let mut bytes = [0u8; ATTEST_REPORT_SIZE];
+        self.enclave_init()?;
+
+        let result = unsafe {
+            ffi::enclave_attest(
+                nonce.as_ptr() as *const c_void,
+                nonce.len(),
+                bytes.as_mut_ptr(),
+            )
+        };
+
+        if result != 0 {
+            return Err(TeeError::AttestFailed(result));
+        }
+
+        self.enclave_drop();
+
+        let tee_report = parse_attest_report(&bytes);
+
+        let report = KeystoneAttestReport {
+            enclave: crate::EnclaveReport {
+                hash: tee_report.enclave.hash,
+                data_len: tee_report.enclave.data_len,
+                data: tee_report.enclave.data,
+                signature: tee_report.enclave.signature,
+            },
+            sm: crate::SmReport {
+                hash: tee_report.sm.hash,
+                public_key: tee_report.sm.pub_key,
+                signature: tee_report.sm.signature,
+            },
+            dev_public_key: tee_report.dev_pub_key,
+        };
+
+        return Ok(crate::AttestReport::Keystone(report));
+    }
+}
+
+fn parse_attest_report(bytes: &[u8; 1352]) -> &AttestReport {
+    unsafe { &*(bytes.as_ptr() as *const AttestReport) }
 }

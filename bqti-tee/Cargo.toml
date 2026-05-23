@@ -12,5 +12,9 @@ cc = "1.0"
 
 [dependencies]
 libc = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
+sha3 = "0.12.0"
+curve25519-dalek = { version = "4.1.3", features = ["alloc"] }
 tempfile = "3.27.0"
+serde-big-array = "0.5.1"

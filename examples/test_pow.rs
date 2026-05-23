@@ -40,6 +40,21 @@ fn main() {
         };
 
         println!("{}", hex::encode(signature));
+
+        let attest_nonce = &[4u8];
+        let report = match tee.attest(attest_nonce) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: {}", e);
+                return;
+            }
+        };
+
+        if report.verify(attest_nonce, None) {
+            println!("report valid");
+        } else {
+            println!("report invalid");
+        }
     }
 
     #[cfg(not(target_arch = "riscv64"))]

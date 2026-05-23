@@ -24,6 +24,8 @@ static enclave_res_t g_response;
 
 static hash_state g_sha256_state;
 
+_Static_assert(sizeof(attest_report_t) == ATTEST_REPORT_SIZE, "attest_report_t size mismatch");
+
 int sha256_hash(const uint8_t *input, size_t input_len, uint8_t hash[32]) {
   sha256_init(&g_sha256_state);
   sha256_process(&g_sha256_state, input, input_len);
@@ -165,6 +167,24 @@ int main(void) {
 
     case OP_FETCH_PUBKEY: {
       memcpy(g_response.pub_key.pub_key, enclave_pubkey(), PUBKEY_LENGTH);
+      break;
+    }
+
+    case OP_ATTEST: {
+      attest_report_t report;
+
+      size_t rt = attest_enclave(
+        &report,
+        (void *)g_request.attest.nonce,
+        g_request.attest.nonce_len
+      );
+
+      if (rt != 0) {
+        g_response.status = ENCLAVE_ERR_GENERIC;
+        break;
+      }
+
+      g_response.attest.report = report;
       break;
     }
 
