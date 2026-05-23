@@ -104,13 +104,13 @@ impl ProveChallenge for TeeProver {
         let tee_pow = self.tee.pow(challenge, difficulty)?;
         let report = self.tee.attest(&tee_pow.hash)?;
 
-        let pow = PoW::with_attestation(
+        let pow = PoW::new(
             tee_pow.hash,
             challenge,
             tee_pow.nonce,
             difficulty,
             tee_pow.sig.to_vec(),
-            report,
+            Some(report),
         );
 
         return Ok(pow);
@@ -160,37 +160,20 @@ pub struct PoW {
 }
 
 impl PoW {
-    pub fn with_attestation(
-        value: Hash32Bytes,
-        challange: u32,
-        nonce: u32,
-        difficulty: u32,
-        signature: Signature,
-        attestation: AttestReport,
-    ) -> Self {
-        Self {
-            value,
-            challange,
-            nonce,
-            signature: Some(signature),
-            attestation: Some(attestation),
-            difficulty,
-        }
-    }
-
     pub fn new(
         value: Hash32Bytes,
         challange: u32,
         nonce: u32,
         difficulty: u32,
         signature: Signature,
+        attestation: Option<AttestReport>,
     ) -> Self {
         Self {
             value,
             challange,
             nonce,
             signature: Some(signature),
-            attestation: None,
+            attestation,
             difficulty,
         }
     }

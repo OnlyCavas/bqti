@@ -1,5 +1,7 @@
 use serde_bytes::ByteBuf;
 
+pub const BQTI_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub type UnixDate = u64;
 
 pub type ByteSize = i64;

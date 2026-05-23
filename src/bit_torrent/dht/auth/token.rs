@@ -43,6 +43,10 @@ impl Token {
         Key::new(&self.peer)
     }
 
+    pub fn trust_level(&self) -> &TrustLevel {
+        &self.trust_level
+    }
+
     fn calculate_hash(&self, issuer: &[u8]) -> Hash32Bytes {
         let mut hasher = Sha256::new();
 
@@ -50,7 +54,18 @@ impl Token {
         hasher.update(&self.pow);
         hasher.update(&self.exp_at.to_be_bytes());
         hasher.update(&self.issued_at.to_be_bytes());
-        hasher.update(&[self.trust_level.clone() as u8]);
+
+        let trust_byte: u8 = match &self.trust_level {
+            TrustLevel::Attested(report) => {
+                let report_bytes = serde_bencode::to_bytes(report).unwrap();
+                hasher.update(&report_bytes);
+                0
+            }
+            TrustLevel::Unattested => 1,
+            TrustLevel::Rejected => 2,
+        };
+
+        hasher.update(&[trust_byte]);
         hasher.update(&issuer);
 
         hasher.finalize().into()

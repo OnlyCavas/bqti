@@ -14,6 +14,7 @@ use crate::{
         message::{AuthDhtRequest, DhtRequest},
         route_table::KBUCKET_MAX,
     },
+    types::BQTI_VERSION,
 };
 
 #[allow(dead_code)]
@@ -131,6 +132,8 @@ impl Kademlia {
                     challange: secret.value,
                     nonce: secret.nonce,
                     signature: signature,
+                    attest_report: secret.attestation.clone(),
+                    app_version: BQTI_VERSION.to_string(),
                 },
                 TIMEOUT_EXCEPTION,
             )

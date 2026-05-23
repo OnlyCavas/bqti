@@ -1,3 +1,4 @@
+use bqti_tee::AttestReport;
 #[cfg(feature = "tee")]
 use bqti_tee::TeeError;
 
@@ -10,17 +11,17 @@ mod token;
 
 pub use manager::AuthManager;
 
-use crate::{bit_torrent::certs::Signer, certs::CertError, types::UnixDate};
+use crate::{bit_torrent::certs::Signer, certs::CertError, dht::ManifestError, types::UnixDate};
 
 pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
 pub const DIFFICULTY: u32 = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[repr(u8)]
 pub enum TrustLevel {
-    Attested = 0,   // verified by TEE
-    Unattested = 1, // doesn't support TEE
-    Rejected = 2,   // it's invalid
+    Attested(AttestReport), // tee chain valid, unless the dev_pubkey that can't be validated
+    // without an manufactor PKI
+    Unattested, // no TEE, software only
+    Rejected,   // TEE present but verification failed
 }
 
 pub trait Evidence {
@@ -57,6 +58,9 @@ pub enum AuthError {
     #[cfg(feature = "tee")]
     #[error(transparent)]
     TeeError(#[from] TeeError),
+
+    #[error("failed to fetch version manifest")]
+    ManifestError(#[from] ManifestError),
 }
 
 pub use pow::*;
