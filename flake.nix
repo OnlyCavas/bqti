@@ -66,7 +66,7 @@
             name = "bqti";
           };
 
-          comp-tee = {
+          gen-tee = {
             type = "app";
             program = toString (pkgs.writeShellScript "deploy" ''
                 cd bqti-enclave
@@ -76,6 +76,44 @@
                 scp -O build/bqti.ke keystone-vm:/root/bqti.ke
                 echo "deployed"
                 '');
+          };
+
+          gen-manifest = {
+            type = "app";
+            program = toString (pkgs.writeShellScript "gen-manifest" ''
+                set -e
+
+                if [ -z "$1" ]; then
+                  echo "usage: nix run .#gen-manifest -- <enclave-hash>"
+                  exit 1
+                fi
+
+                CA_KEY="''${BQTI_CA_KEY:-$HOME/.bqti-pki/main_ca.pem}"
+
+                if [ ! -f "$CA_KEY" ]; then
+                  echo "error: CA private key not found at $CA_KEY"
+                  echo "set BQTI_CA_KEY=/path/to/main_ca.pem or place it at ~/.bqti-pki/main_ca.pem"
+                  exit 1
+                fi
+
+                ENCLAVE_HASH="$1"
+
+                VERSION=$(${pkgs.cargo}/bin/cargo metadata --no-deps --format-version 1 | ${pkgs.jq}/bin/jq -r '.packages[] | select(.name == "bqti") | .version')
+
+                ${pkgs.coreutils}/bin/cat > docs/manifest.json << EOF
+                {
+                  "version": "$VERSION",
+                  "enclave_hash": "$ENCLAVE_HASH"
+                }
+                EOF
+
+                ${pkgs.openssl}/bin/openssl pkeyutl -sign \
+                  -inkey $CA_KEY \
+                  -in docs/manifest.json \
+                  -out docs/manifest.sig
+
+                echo "done."
+            '');
           };
 
           dev = {
