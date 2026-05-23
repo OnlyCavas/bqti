@@ -3,10 +3,10 @@ use sha1::Digest;
 use sha2::Sha256;
 
 use crate::{
-    certs::{Signature, Signer, SoftwareKeyIdentity, Verifier},
+    certs::{ActiveKeyIdentity, Signature, Signer, Verifier},
     dht::{
         Key,
-        auth::{AuthError, Authorizable, Evidence, TOKEN_EXP_SECONDS},
+        auth::{AuthError, Authorizable, Evidence, TOKEN_EXP_SECONDS, TrustLevel},
     },
     types::{Hash32Bytes, UnixDate},
     utils::bqti::fetch_current_timestamp,
@@ -19,11 +19,12 @@ pub struct Token {
     issued_at: UnixDate,
     exp_at: UnixDate,
     pub issuer: Vec<u8>,
+    trust_level: TrustLevel,
     signature: Option<Signature>,
 }
 
 impl Token {
-    pub(crate) fn new(peer: &[u8], pow: Hash32Bytes) -> Self {
+    pub(crate) fn new(peer: &[u8], pow: Hash32Bytes, level: TrustLevel) -> Self {
         let peer = peer.to_vec();
         let pre_allocated_capacity = peer.capacity();
 
@@ -34,6 +35,7 @@ impl Token {
             exp_at: 0,
             issuer: Vec::with_capacity(pre_allocated_capacity),
             signature: None,
+            trust_level: level,
         }
     }
 
@@ -48,6 +50,7 @@ impl Token {
         hasher.update(&self.pow);
         hasher.update(&self.exp_at.to_be_bytes());
         hasher.update(&self.issued_at.to_be_bytes());
+        hasher.update(&[self.trust_level.clone() as u8]);
         hasher.update(&issuer);
 
         hasher.finalize().into()
@@ -91,7 +94,7 @@ impl Authorizable for Token {
         };
 
         let secret = self.calculate_hash(&self.issuer);
-        SoftwareKeyIdentity::verify(&self.issuer, &secret, &signature)
+        ActiveKeyIdentity::verify(&self.issuer, &secret, &signature)
     }
 
     fn is_expired(&self) -> bool {

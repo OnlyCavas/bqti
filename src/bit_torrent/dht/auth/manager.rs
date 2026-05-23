@@ -9,7 +9,7 @@ use crate::{
         Key, Node,
         auth::{
             ActiveProver, AuthError, Authorizable, ChallangeProof, Evidence, PoW, SecretSalt,
-            Token, make_prover,
+            Token, TrustLevel, make_prover,
         },
     },
     types::UnixDate,
@@ -72,7 +72,19 @@ impl AuthManager {
             return Err(AuthError::RoguePeer());
         }
 
-        let mut token = Token::new(sender.id.pub_key(), secret.value);
+        // FIXME expected hash it's none for now, but must be later changed
+        let trust_level = match &secret.attestation {
+            Some(report) => {
+                if report.verify(&secret.value, None) {
+                    TrustLevel::Attested
+                } else {
+                    TrustLevel::Rejected
+                }
+            }
+            None => TrustLevel::Unattested,
+        };
+
+        let mut token = Token::new(sender.id.pub_key(), secret.value, trust_level);
         token.sign(&*self.certificate)?;
 
         Ok(token)

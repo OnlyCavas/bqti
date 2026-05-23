@@ -42,6 +42,7 @@ libc.workspace = true
 ring.workspace = true
 hex.workspace = true
 bqti-ipc = { path = "bqti-ipc" }
+bqti-tee = { path = "bqti-tee" }
 serde_bencode = "0.2.4"
 serde_bytes = "0.11.19"
 sha1 = "0.10.6"

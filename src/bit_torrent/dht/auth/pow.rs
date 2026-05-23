@@ -1,5 +1,6 @@
 use std::{net::IpAddr, sync::Arc};
 
+use bqti_tee::AttestReport;
 #[cfg(feature = "tee")]
 use bqti_tee::{Tee, TeeExecute};
 
@@ -8,7 +9,7 @@ use sha1::Digest;
 use sha2::Sha256;
 
 use crate::{
-    certs::{Signature, Signer, SoftwareKeyIdentity, Verifier},
+    certs::{ActiveKeyIdentity, Signature, Signer, Verifier},
     dht::auth::{AuthError, ChallangeProof},
     types::Hash32Bytes,
 };
@@ -71,6 +72,7 @@ impl ProveChallenge for SoftwareProver {
                     nonce,
                     signature: Some(signature),
                     difficulty,
+                    attestation: None,
                 });
             }
 
@@ -100,14 +102,16 @@ impl TeeProver {
 impl ProveChallenge for TeeProver {
     fn prove(&self, _public_key: &[u8], challenge: u32, difficulty: u32) -> Result<PoW, AuthError> {
         let tee_pow = self.tee.pow(challenge, difficulty)?;
+        let report = self.tee.attest(&tee_pow.hash)?;
 
-        let pow = PoW {
-            value: tee_pow.hash,
-            challange: challenge,
-            nonce: tee_pow.nonce,
-            signature: Some(tee_pow.sig.to_vec()),
+        let pow = PoW::with_attestation(
+            tee_pow.hash,
+            challenge,
+            tee_pow.nonce,
             difficulty,
-        };
+            tee_pow.sig.to_vec(),
+            report,
+        );
 
         return Ok(pow);
     }
@@ -151,10 +155,29 @@ pub struct PoW {
     pub challange: u32,
     pub nonce: u32,
     pub signature: Option<Signature>,
+    pub attestation: Option<AttestReport>,
     pub difficulty: u32,
 }
 
 impl PoW {
+    pub fn with_attestation(
+        value: Hash32Bytes,
+        challange: u32,
+        nonce: u32,
+        difficulty: u32,
+        signature: Signature,
+        attestation: AttestReport,
+    ) -> Self {
+        Self {
+            value,
+            challange,
+            nonce,
+            signature: Some(signature),
+            attestation: Some(attestation),
+            difficulty,
+        }
+    }
+
     pub fn new(
         value: Hash32Bytes,
         challange: u32,
@@ -167,6 +190,7 @@ impl PoW {
             challange,
             nonce,
             signature: Some(signature),
+            attestation: None,
             difficulty,
         }
     }
@@ -204,40 +228,6 @@ impl PoW {
     }
 }
 
-// impl Challenge for PoW {
-//     fn generate(pub_key: &[u8], challange: u32, difficulty: u32) -> PoW {
-//         let mut prof_of_work: [u8; 32];
-//         let mut nonce: u32 = 0;
-//
-//         loop {
-//             prof_of_work = Self::calculate(pub_key, challange, nonce);
-//
-//             if Self::validate(&prof_of_work, difficulty) {
-//                 return Self {
-//                     value: prof_of_work,
-//                     challange,
-//                     nonce,
-//                     signature: None,
-//                     difficulty,
-//                 };
-//             }
-//
-//             nonce = nonce.wrapping_add(1);
-//         }
-//     }
-// }
-
-// impl Evidence for PoW {
-//     fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError> {
-//         let signature = signer
-//             .sign(&self.value)
-//             .map_err(|_| AuthError::UnAuthorized())?;
-//
-//         self.signature = Some(signature);
-//         Ok(())
-//     }
-// }
-
 impl ChallangeProof for PoW {
     fn verify(&self, pub_key: &[u8]) -> bool {
         let Some(signature) = self.signature.clone() else {
@@ -254,6 +244,6 @@ impl ChallangeProof for PoW {
             return false;
         }
 
-        SoftwareKeyIdentity::verify(pub_key, &self.value, &signature)
+        ActiveKeyIdentity::verify(pub_key, &self.value, &signature)
     }
 }
