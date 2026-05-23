@@ -1,5 +1,6 @@
 use std::{collections::HashSet, net::SocketAddr};
 
+use bqti_tee::AttestReport;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -90,6 +91,8 @@ pub enum DhtRequest {
         challange: [u8; 32],
         nonce: u32,
         signature: Signature,
+        attest_report: Option<AttestReport>,
+        app_version: String,
     },
 }
 

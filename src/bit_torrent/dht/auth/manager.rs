@@ -6,7 +6,7 @@ use crate::{
     bit_torrent::certs::PublicKey,
     certs::ActiveKeyIdentity,
     dht::{
-        Key, Node,
+        Key, Manifest, Node,
         auth::{
             ActiveProver, AuthError, Authorizable, ChallangeProof, Evidence, PoW, SecretSalt,
             Token, TrustLevel, make_prover,
@@ -67,16 +67,22 @@ impl AuthManager {
         SecretSalt::calculate_challenge(&pub_key, &ip, &secret_salt)
     }
 
-    pub async fn issue_token(&self, sender: &Node, secret: &PoW) -> Result<Token, AuthError> {
+    pub async fn issue_token(
+        &self,
+        sender: &Node,
+        secret: &PoW,
+        app_version: &str,
+    ) -> Result<Token, AuthError> {
         if !secret.verify(sender.id.pub_key()) {
             return Err(AuthError::RoguePeer());
         }
 
-        // FIXME expected hash it's none for now, but must be later changed
         let trust_level = match &secret.attestation {
             Some(report) => {
-                if report.verify(&secret.value, None) {
-                    TrustLevel::Attested
+                let expected_enclave_hash = Manifest::get_enclave_hash(app_version).await?;
+
+                if report.verify(&secret.value, Some(&expected_enclave_hash)) {
+                    TrustLevel::Attested(report.clone())
                 } else {
                     TrustLevel::Rejected
                 }
@@ -103,7 +109,15 @@ impl AuthManager {
 
     pub async fn best_token(&self) -> Option<Token> {
         let held = self.tokens.read().await;
-        held.iter().find(|t| !t.is_expired()).cloned()
+
+        held.iter()
+            .filter(|t| !t.is_expired())
+            .max_by_key(|t| match t.trust_level() {
+                TrustLevel::Attested(_) => 2,
+                TrustLevel::Unattested => 1,
+                TrustLevel::Rejected => 0,
+            })
+            .cloned()
     }
 
     pub fn certificate(&self) -> &ActiveKeyIdentity {

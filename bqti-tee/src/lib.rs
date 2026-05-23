@@ -109,7 +109,7 @@ impl KeystoneAttestReport {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "tee", content = "report")]
 pub enum AttestReport {
     Keystone(KeystoneAttestReport),

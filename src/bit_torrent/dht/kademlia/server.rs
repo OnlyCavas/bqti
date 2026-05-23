@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 
+use bqti_tee::AttestReport;
+
 use crate::{
     dht::{
         DhtPacket, DhtResponse, Kademlia, KademliaData, KademliaError, Key, Node, RequestId,
@@ -46,6 +48,8 @@ impl Kademlia {
                 challange,
                 nonce,
                 signature,
+                attest_report,
+                app_version,
             } => {
                 self.handle_submit_challange(
                     request.id,
@@ -53,6 +57,8 @@ impl Kademlia {
                     challange,
                     nonce,
                     signature,
+                    attest_report,
+                    app_version,
                 )
                 .await
             }
@@ -241,14 +247,16 @@ impl Kademlia {
         pow: Hash32Bytes,
         nonce: u32,
         pow_sign: Vec<u8>,
+        attest_report: Option<AttestReport>,
+        app_version: String,
     ) -> Result<(), KademliaError> {
         let challange = self
             .auth
             .challange(sender.id.pub_key(), &sender.addr.ip())
             .await;
 
-        let secret = PoW::new(pow, challange, nonce, DIFFICULTY, pow_sign);
-        let token = self.auth.issue_token(sender, &secret).await?;
+        let secret = PoW::new(pow, challange, nonce, DIFFICULTY, pow_sign, attest_report);
+        let token = self.auth.issue_token(sender, &secret, &app_version).await?;
 
         self.rpc_handler
             .reply(&sender, request_id, DhtResponse::Welcome { token })

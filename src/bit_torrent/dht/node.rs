@@ -14,22 +14,6 @@ pub enum NodeError {
     FailParse(#[from] std::net::AddrParseError),
 }
 
-pub struct BootStrap(Node);
-
-impl BootStrap {
-    pub fn new(addr: &str) -> Result<Self, NodeError> {
-        Ok(Self(Node::from_socket(Key::new(&[0u8; 32]), addr.parse()?)))
-    }
-
-    pub fn from_socket(socket: SocketAddr) -> Self {
-        Self(Node::from_socket(Key::new(&[0u8; 32]), socket))
-    }
-
-    pub fn node(&self) -> &Node {
-        &self.0
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: Key,
@@ -82,5 +66,21 @@ impl From<&Node> for Peer {
             id: value.id.hex(),
             address: value.addr,
         }
+    }
+}
+
+pub struct BootStrap(Node);
+
+impl BootStrap {
+    pub fn new(addr: &str) -> Result<Self, NodeError> {
+        Ok(Self(Node::from_socket(Key::new(&[0u8; 32]), addr.parse()?)))
+    }
+
+    pub fn from_socket(socket: SocketAddr) -> Self {
+        Self(Node::from_socket(Key::new(&[0u8; 32]), socket))
+    }
+
+    pub fn node(&self) -> &Node {
+        &self.0
     }
 }
