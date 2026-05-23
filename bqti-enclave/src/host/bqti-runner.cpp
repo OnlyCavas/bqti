@@ -1,14 +1,13 @@
 #include "enclave_ffi.h"
 #include "protocol.h"
+#include <cstdint>
 #include <cstdio>
 
 void print_hex(const uint8_t *data, size_t data_len) {
   for (int i = 0; i < data_len; i++) printf("%02x", data[i]);
 }
 
-int main(int argc, char **argv) {
-  enclave_init(argv[1], argv[2], argv[3]);
-
+void test_pow() {
   pow_result_t result;
   int status = enclave_run_pow(0xDEADBEEF, 20, &result);
 
@@ -41,6 +40,32 @@ int main(int argc, char **argv) {
   printf("\n");
   printf("%zu", sizeof(attest_report_t));
   printf("\n");
+}
+
+int main(int argc, char **argv) {
+  enclave_init(argv[1], argv[2], argv[3]);
+
+  pow_result_t result;
+  attest_report_t report;
+
+  uint32_t nonce = 0xDEADBEEF;
+  int status = enclave_attest(
+    &nonce,
+    sizeof(uint32_t),
+    reinterpret_cast<uint8_t*>(&report)
+  );
+
+  if (status != ENCLAVE_OK) {
+    printf("failed to attest");
+  } else {
+    printf("enclave-hash: ");
+
+    for (size_t i = 0; i < sizeof(report.enclave.hash); i++) {
+      printf("%02x", report.enclave.hash[i]);
+    }
+
+    printf("\n");
+  }
 
   enclave_destroy();
   return 0;
