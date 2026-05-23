@@ -4,6 +4,8 @@
 #include "host/Enclave.hpp"
 #include "host/Params.hpp"
 #include "protocol.h"
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 
@@ -108,6 +110,21 @@ int enclave_sign(const void* data, size_t data_len, uint8_t out[64]) {
   g_enclave->run();
 
   memcpy(out, g_enclave_response.sign.sig, SIGNATURE_LENGTH);
+  return g_enclave_response.status;
+}
+
+int enclave_attest(const void *nonce, size_t nonce_len, uint8_t out[ATTEST_REPORT_SIZE]) {
+
+  if (!g_initialized)
+    return -1;
+
+  g_enclave_request.op = OP_ATTEST;
+  memcpy(g_enclave_request.attest.nonce, nonce, nonce_len);
+  g_enclave_request.attest.nonce_len = nonce_len;
+
+  g_enclave->run();
+
+  memcpy(out, &g_enclave_response.attest.report, sizeof(attest_report_t));
   return g_enclave_response.status;
 }
 

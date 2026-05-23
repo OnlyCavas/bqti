@@ -38,6 +38,10 @@ int main(int argc, char **argv) {
   printf("\n");
   printf("status: %d\n", status);
 
+  printf("\n");
+  printf("%zu", sizeof(attest_report_t));
+  printf("\n");
+
   enclave_destroy();
   return 0;
 }
