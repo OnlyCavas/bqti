@@ -1,6 +1,7 @@
 #[cfg(feature = "tee")]
 use bqti_tee::TeeError;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod manager;
@@ -13,6 +14,14 @@ use crate::{bit_torrent::certs::Signer, certs::CertError, types::UnixDate};
 
 pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
 pub const DIFFICULTY: u32 = 16;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum TrustLevel {
+    Attested = 0,   // verified by TEE
+    Unattested = 1, // doesn't support TEE
+    Rejected = 2,   // it's invalid
+}
 
 pub trait Evidence {
     fn sign(&mut self, signer: &impl Signer) -> Result<(), AuthError>;
