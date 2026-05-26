@@ -140,7 +140,6 @@ impl RpcHandler {
         .await
     }
 
-    // FIX if timeout exceded, breaks the connection flow
     pub async fn handle_request(
         &self,
         peer: &Node,
