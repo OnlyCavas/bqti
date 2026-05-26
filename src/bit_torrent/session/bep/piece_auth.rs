@@ -9,10 +9,22 @@ use crate::{
 
 const SIGNATURE_LENGTH: usize = 64;
 
+#[cfg(not(feature = "ml_piece_sub"))]
 fn piece_hash(index: u32, data: &[u8]) -> Hash32Bytes {
     let mut hasher = Sha256::new();
 
     hasher.update(&index.to_le_bytes());
+    hasher.update(data);
+
+    hasher.finalize().into()
+}
+
+#[cfg(feature = "ml_piece_sub")]
+fn piece_hash(_index: u32, data: &[u8]) -> Hash32Bytes {
+    let fake_index = rand::random::<u32>();
+    let mut hasher = Sha256::new();
+
+    hasher.update(&fake_index.to_le_bytes());
     hasher.update(data);
 
     hasher.finalize().into()
