@@ -73,8 +73,13 @@ pub struct SeedingOptions {
 }
 
 pub enum TorrentAction {
-    Download { source: TorrentSource },
-    Seed { options: SeedingOptions },
+    Download {
+        source: TorrentSource,
+        user_space: PathBuf,
+    },
+    Seed {
+        options: SeedingOptions,
+    },
 }
 
 pub enum TorrentSource {
@@ -113,7 +118,7 @@ impl Torrenting for Bqti {
         action: TorrentAction,
     ) -> Result<Arc<TorrentFile>, BqtiTorretingError> {
         let (torrent_file, mode) = match action {
-            TorrentAction::Download { source } => {
+            TorrentAction::Download { source, user_space } => {
                 let torrent = match source {
                     TorrentSource::TorrentFile(torrent_path) => load(&torrent_path)?,
                     TorrentSource::MagnetLink(_) => {
@@ -121,7 +126,12 @@ impl Torrenting for Bqti {
                     }
                 };
 
-                (torrent, SessionMode::Download)
+                (
+                    torrent,
+                    SessionMode::Download {
+                        destination_dir: user_space,
+                    },
+                )
             }
 
             TorrentAction::Seed { options } => {

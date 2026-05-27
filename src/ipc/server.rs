@@ -258,11 +258,12 @@ async fn dispatch(request: Request, ctx: &ClientCtx) -> Reply {
             upload_rate: 0,
             download_rate: 0,
         })),
-        Request::AddDownload { link } => {
+        Request::AddDownload { link, user_space } => {
             let torrent_file = ctx
                 .bqti
                 .add_torrent(TorrentAction::Download {
                     source: TorrentSource::parse(&link)?,
+                    user_space: user_space.into(),
                 })
                 .await
                 .map_err(|e| e.to_string())?;

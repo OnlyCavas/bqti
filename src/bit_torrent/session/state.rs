@@ -41,12 +41,16 @@ impl<Mode> StateResources<Mode> {
 }
 
 impl StateResources<Downloading> {
-    pub async fn download(metafile: Arc<TorrentFile>) -> Result<Self, TorrentSessionError> {
+    pub async fn download(
+        metafile: Arc<TorrentFile>,
+        user_space: &Path,
+    ) -> Result<Self, TorrentSessionError> {
         let piece_length = metafile.piece_length();
         let files = metafile.files();
 
         let cache = match SessionCache::new(CachingMode::Download {
             metafile: metafile.clone(),
+            user_space: user_space.to_path_buf(),
         })
         .await
         {
@@ -138,7 +142,7 @@ impl StateResources<Seeding> {
 
 #[derive(Clone)]
 pub enum LastState {
-    Downloading,
+    Downloading { dest: PathBuf },
     Seeding { path: PathBuf },
 }
 
@@ -146,6 +150,7 @@ pub enum TorrentState {
     Idle(Option<LastState>),
     Downloading {
         path: PathBuf,
+        dest: PathBuf,
         resources: Option<StateResources<Downloading>>,
         token: CancellationToken,
         tx: mpsc::Sender<(u32, Vec<u8>)>,
@@ -240,9 +245,11 @@ impl TorrentState {
         }
     }
 
-    pub fn take_downloading(&mut self) -> Option<StateResources<Downloading>> {
+    pub fn take_downloading(&mut self) -> Option<(PathBuf, StateResources<Downloading>)> {
         match self {
-            TorrentState::Downloading { resources, .. } => resources.take(),
+            TorrentState::Downloading {
+                dest, resources, ..
+            } => Some((dest.clone(), resources.take()?)),
             _ => None,
         }
     }

@@ -22,6 +22,7 @@ pub enum Request {
     },
     AddDownload {
         link: String,
+        user_space: String,
     },
     AddSeed {
         name: Option<String>,
