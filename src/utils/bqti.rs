@@ -180,6 +180,21 @@ pub fn certs_dir() -> Option<PathBuf> {
     Some(data.join("certs"))
 }
 
+pub fn swarm_dir() -> Option<PathBuf> {
+    let data = bqti_data_dir()?;
+    Some(data.join("swarm"))
+}
+
+pub fn inner_files(dir: &Path) -> Option<Vec<PathBuf>> {
+    let paths = fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+
+    Some(paths)
+}
+
 pub async fn ensure_dir(path: &PathBuf) -> Result<()> {
     tokio::fs::create_dir_all(path)
         .await

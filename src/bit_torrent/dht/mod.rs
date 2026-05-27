@@ -87,4 +87,4 @@ impl From<&InfoHash> for Key {
     }
 }
 
-pub use auth::{ActiveProver, AuthError, AuthManager, ProveChallenge};
+pub use auth::{ActiveProver, AuthError, AuthManager, ProveChallenge, make_prover};

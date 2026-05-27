@@ -21,7 +21,9 @@ impl Kademlia {
     ) -> Result<(), KademliaError> {
         match packet {
             DhtPacket::Request { token, envelop } => {
-                if !token.verify() {
+                let pgp_keys = self.auth.pgp_keys.read().await;
+
+                if !token.verify() || !token.verify_pgp(&pgp_keys) {
                     return Err(AuthError::InvalidToken())?;
                 }
 
