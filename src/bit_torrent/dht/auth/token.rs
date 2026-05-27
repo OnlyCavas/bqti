@@ -2,8 +2,7 @@ use std::{collections::HashMap, io::Cursor};
 
 use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
 use serde::{Deserialize, Serialize};
-use sha1::Digest;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::{
     certs::{ActiveKeyIdentity, KeyIdentity, Signature, Signer, Verifier},
@@ -46,6 +45,10 @@ impl Token {
             issuer_ca_cert: Vec::new(),
             issuer_ca_cert_sig: Vec::new(),
         }
+    }
+
+    pub fn hash(&self) -> Hash32Bytes {
+        self.calculate_hash(&self.issuer)
     }
 
     pub fn sender(&self) -> Key {

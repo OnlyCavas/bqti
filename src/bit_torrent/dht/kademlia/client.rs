@@ -14,6 +14,7 @@ use crate::{
         message::{AuthDhtRequest, DhtRequest},
         route_table::KBUCKET_MAX,
     },
+    network::ConnectionAuth,
     types::BQTI_VERSION,
 };
 
@@ -144,8 +145,19 @@ impl Kademlia {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
-        if !token.verify_for(&host_id.pub_key()) {
+        let pgp_keys = self.auth.pgp_keys.read().await;
+        if !token.verify_for(&host_id.pub_key()) || !token.verify_pgp(&pgp_keys) {
             return Err(AuthError::RoguePeer())?;
+        }
+
+        if let Some(conn) = self
+            .rpc_handler
+            .connection_manager
+            .get_connection(&bootstrap.addr)
+            .await
+        {
+            conn.authenticate(ConnectionAuth::Authenticated(token.clone()))
+                .await;
         }
 
         let boostrap = Node::from_socket(Key::new(&token.issuer), bootstrap.addr);

@@ -144,6 +144,11 @@ impl ConnectionManager {
         Ok(SocketAddr::new(ip, addr.port()))
     }
 
+    pub async fn get_connection(&self, socket_addr: &SocketAddr) -> Option<Arc<Connection>> {
+        let connection = self.connections.read().await;
+        connection.get(socket_addr).cloned()
+    }
+
     fn on_disconnect_handler(&self, connection_id: u64) -> OnDisconnect {
         let weak_connections = Arc::downgrade(&self.connections);
         let disconnect_tx = self.disconnect_tx.clone();

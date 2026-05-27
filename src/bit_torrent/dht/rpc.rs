@@ -17,7 +17,6 @@ use tokio::{
 use crate::{
     dht::{
         Node, RequestId,
-        auth::Token,
         message::{
             AuthDhtRequest, DhtMessageError, DhtPacket, DhtRequest, DhtResponse, RpcEnvelope,
             RpcResponse,
@@ -129,12 +128,10 @@ impl RpcHandler {
     pub async fn request(
         &self,
         peer: &Node,
-        token: Token,
         payload: AuthDhtRequest,
         tout: Duration,
     ) -> Result<DhtResponse, RpcError> {
         self.handle_request(peer, tout, |id| DhtPacket::Request {
-            token,
             envelop: RpcEnvelope::new(id, payload),
         })
         .await

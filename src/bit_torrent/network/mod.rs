@@ -7,7 +7,7 @@ mod peer;
 mod resolver;
 
 pub use config::QuicEndpointBuilder;
-pub use connection::{Connection, ConnectionError, OnDisconnect, QuicServerOpts};
+pub use connection::{Connection, ConnectionAuth, ConnectionError, OnDisconnect, QuicServerOpts};
 pub use endpoint::NetworkEndpoint;
 pub use manager::{ConnectionManager, ConnectionManagerError, ManagerOptions};
 pub use message::{Message, Packet};
