@@ -1,44 +1,50 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
+use async_trait::async_trait;
 use bqti_tee::AttestReport;
 
 use crate::{
+    certs::{ActiveKeyIdentity, Verifier},
     dht::{
-        DhtPacket, DhtResponse, Kademlia, KademliaData, KademliaError, Key, Node, RequestId,
-        RpcRequest,
+        DhtPacket, DhtResponse, Kademlia, KademliaData, KademliaError, KademliaServer, Key, Node,
+        RequestId, RpcRequest,
         auth::{AuthError, Authorizable, DIFFICULTY, PoW},
         message::{AuthDhtRequest, AuthRpcRequest, DhtRequest, PeerResponse},
         route_table::KBUCKET_MAX,
     },
+    network::{Connection, ConnectionAuth},
     types::Hash32Bytes,
 };
 
-impl Kademlia {
-    pub async fn handle_packet(
+#[async_trait]
+impl KademliaServer for Kademlia {
+    async fn handle_packet(
         &self,
         packet: DhtPacket,
         src: SocketAddr,
+        connection: Arc<Connection>,
     ) -> Result<(), KademliaError> {
         match packet {
-            DhtPacket::Request { token, envelop } => {
-                let pgp_keys = self.auth.pgp_keys.read().await;
-
-                if !token.verify() || !token.verify_pgp(&pgp_keys) {
+            DhtPacket::Request { envelop } => {
+                let Some(token) = connection.peer_token().await else {
                     return Err(AuthError::InvalidToken())?;
-                }
+                };
 
                 self.auth.check_rate(&token.sender()).await?;
                 self.handle_request(token.sender(), envelop, src).await
             }
-            DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src).await,
+            DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src, connection).await,
             _ => panic!("shouldn't receive any response packages"),
         }
     }
+}
 
+impl Kademlia {
     async fn handle_handshake(
         &self,
         request: RpcRequest,
         src: SocketAddr,
+        connection: Arc<Connection>,
     ) -> Result<(), KademliaError> {
         match request.payload {
             DhtRequest::RequestChallange { sender_id } => {
@@ -61,8 +67,62 @@ impl Kademlia {
                     signature,
                     attest_report,
                     app_version,
+                    connection,
                 )
                 .await
+            }
+            DhtRequest::RequestHandshake { sender_id } => {
+                let sender = &Node::from_socket(sender_id, src);
+
+                let challange = self
+                    .auth
+                    .challange(&sender.id.pub_key(), &sender.addr.ip())
+                    .await;
+
+                self.rpc_handler
+                    .reply(
+                        &sender,
+                        request.id,
+                        DhtResponse::HandshakeChallange { nonce: challange },
+                    )
+                    .await?;
+
+                Ok(())
+            }
+            DhtRequest::SubmitHandshake { token, signature } => {
+                let host_id = {
+                    let route_table = self.route_table.read().await;
+                    route_table.host.id.clone()
+                };
+
+                let pgp_keys = self.auth.pgp_keys.read().await;
+                let sender_id = token.sender();
+
+                if !token.verify() || !token.verify_pgp(&pgp_keys) {
+                    return Err(AuthError::InvalidToken())?;
+                }
+
+                if !ActiveKeyIdentity::verify(sender_id.pub_key(), &token.hash(), &signature) {
+                    return Err(AuthError::RoguePeer())?;
+                }
+
+                let sender = Node::from_socket(sender_id, src);
+
+                self.rpc_handler
+                    .reply(
+                        &sender,
+                        request.id,
+                        DhtResponse::Pong {
+                            receiver_id: host_id,
+                        },
+                    )
+                    .await?;
+
+                connection
+                    .authenticate(ConnectionAuth::Authenticated(token))
+                    .await;
+
+                Ok(())
             }
         }
     }
@@ -251,6 +311,7 @@ impl Kademlia {
         pow_sign: Vec<u8>,
         attest_report: Option<AttestReport>,
         app_version: String,
+        connection: Arc<Connection>,
     ) -> Result<(), KademliaError> {
         let challange = self
             .auth
@@ -261,8 +322,18 @@ impl Kademlia {
         let token = self.auth.issue_token(sender, &secret, &app_version).await?;
 
         self.rpc_handler
-            .reply(&sender, request_id, DhtResponse::Welcome { token })
+            .reply(
+                &sender,
+                request_id,
+                DhtResponse::Welcome {
+                    token: token.clone(),
+                },
+            )
             .await?;
+
+        connection
+            .authenticate(ConnectionAuth::Authenticated(token.clone()))
+            .await;
 
         Ok(())
     }

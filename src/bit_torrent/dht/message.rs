@@ -83,6 +83,13 @@ pub enum AuthDhtRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtRequest {
+    RequestHandshake {
+        sender_id: Key,
+    },
+    SubmitHandshake {
+        token: Token,
+        signature: Signature,
+    },
     RequestChallange {
         sender_id: Key,
     },
@@ -98,6 +105,9 @@ pub enum DhtRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtResponse {
+    HandshakeChallange {
+        nonce: u32,
+    },
     Pong {
         receiver_id: Key,
     },
@@ -120,10 +130,7 @@ pub enum DhtResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtPacket {
-    Request {
-        token: Token,
-        envelop: AuthRpcRequest,
-    },
+    Request { envelop: AuthRpcRequest },
     HandShake(RpcRequest),
     Response(RpcResponse),
 }

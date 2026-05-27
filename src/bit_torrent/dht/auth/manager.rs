@@ -39,7 +39,7 @@ pub struct AuthManager {
     prover: Arc<ActiveProver>,
     secret_salt: RwLock<SecretSalt>,
     rate_limiter: RateLimiter,
-    tokens: RwLock<Vec<Token>>,
+    token: RwLock<Option<Token>>,
 }
 
 impl AuthManager {
@@ -60,11 +60,11 @@ impl AuthManager {
             inner_cert: certificate,
             secret_salt: RwLock::new(SecretSalt::new()),
             rate_limiter: RateLimiter::new(REQUEST_NUMBER, REQUEST_PER_SECOND),
-            tokens: RwLock::new(Vec::new()),
             prover: Arc::new(prover),
             ca_root_certificate: ca_root,
             pgp_details: pgp_signature,
             pgp_keys: pgp_keys.clone(),
+            token: RwLock::new(None),
         });
 
         let weak_ptr = Arc::downgrade(&auth_manager);
@@ -133,26 +133,15 @@ impl AuthManager {
     }
 
     pub async fn store_token(&self, token: Token) {
-        let mut held_tokens = self.tokens.write().await;
-        held_tokens.retain(|t| !t.is_expired());
-
-        if let Some(existing) = held_tokens.iter_mut().find(|t| t.issuer == token.issuer) {
-            *existing = token;
-        } else {
-            held_tokens.push(token);
-        }
+        *self.token.write().await = Some(token);
     }
 
     pub async fn best_token(&self) -> Option<Token> {
-        let held = self.tokens.read().await;
-
-        held.iter()
+        self.token
+            .read()
+            .await
+            .as_ref()
             .filter(|t| !t.is_expired())
-            .max_by_key(|t| match t.trust_level() {
-                TrustLevel::Attested => 2,
-                TrustLevel::Unattested => 1,
-                TrustLevel::Rejected => 0,
-            })
             .cloned()
     }
 

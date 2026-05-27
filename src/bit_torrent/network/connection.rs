@@ -3,11 +3,14 @@ use std::{net::SocketAddr, sync::Arc};
 use async_trait::async_trait;
 use quinn::ConnectionError as QuicConnectionError;
 use thiserror::Error;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::network::message::{Message, Packet};
+use crate::{
+    dht::Token,
+    network::message::{Message, Packet},
+};
 
 const BUFFER_SIZE: u32 = 1024 * 1024;
 pub type OnDisconnect = Arc<dyn Fn(SocketAddr) + Send + Sync + 'static>;
@@ -45,11 +48,17 @@ pub trait BidirectionalStream {
     async fn request(&self, request: Message) -> Result<Vec<u8>, ConnectionError>;
 }
 
+pub enum ConnectionAuth {
+    Authenticated(Token),
+    UnAuthenticated,
+}
+
 pub struct Connection {
     pub id: u64,
     connection: quinn::Connection,
     control_stream: Arc<Mutex<Option<quinn::SendStream>>>,
     cancellation_token: CancellationToken,
+    auth: Arc<RwLock<ConnectionAuth>>,
 }
 
 impl Connection {
@@ -82,6 +91,7 @@ impl Connection {
             connection: quic,
             cancellation_token,
             control_stream: Arc::new(Mutex::new(Some(control_stream))),
+            auth: Arc::new(tokio::sync::RwLock::new(ConnectionAuth::UnAuthenticated)),
         });
 
         let task_connection = connection.clone();
@@ -104,6 +114,22 @@ impl Connection {
         );
 
         Ok(connection)
+    }
+
+    pub async fn is_authenticated(&self) -> bool {
+        matches!(*self.auth.read().await, ConnectionAuth::Authenticated(_))
+    }
+
+    pub async fn peer_token(&self) -> Option<Token> {
+        match &*self.auth.read().await {
+            ConnectionAuth::Authenticated(token) => Some(token.clone()),
+            ConnectionAuth::UnAuthenticated => None,
+        }
+    }
+
+    pub async fn authenticate(&self, mode: ConnectionAuth) {
+        let mut connection = self.auth.write().await;
+        *connection = mode;
     }
 
     async fn handle_connection(

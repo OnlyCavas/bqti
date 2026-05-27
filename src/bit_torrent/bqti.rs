@@ -14,7 +14,7 @@ use crate::{
         torrent::metainfo::TorrentError,
     },
     certs::ActiveKeyIdentity,
-    dht::{DhtPacket, Kademlia, RpcHandler, TorrentDht},
+    dht::{DhtPacket, Kademlia, KademliaServer, RpcHandler, TorrentDht},
     ipc::server::{IpcCommandError, IpcServer},
     load,
     network::{ConnectionManager, Message, Packet},
@@ -253,7 +253,12 @@ impl Bqti {
                                             return;
                                         };
 
-                                        let _ = bqti.kademlia.handle_packet(request, incoming_packet.source_addr).await;
+                                        let Some(connection) = bqti.connection_manager.get_connection(&incoming_packet.source_addr).await else {
+                                            warn!("received dht packet from unknown connection: {}", incoming_packet.source_addr);
+                                            return;
+                                        };
+
+                                        let _ = bqti.kademlia.handle_packet(request, incoming_packet.source_addr, connection).await;
                                     },
                                     Err(e) => error!("dht parse error: {}", e),
                                 }
