@@ -14,6 +14,7 @@ const TORRENT_FILE: &str = ".torrent";
 
 pub enum CachingMode {
     Download {
+        user_space: PathBuf,
         metafile: Arc<TorrentFile>,
     },
     Seed {
@@ -31,7 +32,7 @@ pub struct SessionCache {
 impl SessionCache {
     pub async fn new(mode: CachingMode) -> Option<Self> {
         let (cache_dir, metafile) = match mode {
-            CachingMode::Download { metafile } => (
+            CachingMode::Download { metafile, .. } => (
                 ensure_download_dir(metafile.info_hash().to_string())?,
                 metafile,
             ),
@@ -56,8 +57,11 @@ impl SessionCache {
         let mut cache = vec![];
 
         let section: [(_, fn(PathBuf, Arc<TorrentFile>) -> CachingMode); 2] = [
-            (utils::bqti::downloads_dir(), |_, metafile| {
-                CachingMode::Download { metafile }
+            (utils::bqti::downloads_dir(), |user_space, metafile| {
+                CachingMode::Download {
+                    metafile,
+                    user_space,
+                }
             }),
             (utils::bqti::uploads_dir(), |user_space, metafile| {
                 CachingMode::Seed {

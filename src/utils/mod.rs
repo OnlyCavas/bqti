@@ -8,10 +8,10 @@ pub mod console;
 
 pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
     let divider = "─".repeat(60);
-    let thin = "·".repeat(60);
+    let thin = "+".repeat(59);
 
     println!("┌{}┐", divider);
-    println!("│{:^60}│", "🧲 TORRENT INFO");
+    println!("│{:^59}│", "🧲 TORRENT INFO");
     println!("└{}┘", divider);
     println!();
 
@@ -19,7 +19,10 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
         "  🔑 Info Hash    {}",
         hex::encode(torrent.info_hash().as_ref())
     );
+
+    println!();
     println!("  {}", thin);
+    println!();
 
     if let Some(announce) = torrent.announce() {
         println!("  📡 Announce     {}", announce);
@@ -45,6 +48,7 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
 
     println!();
     println!("  {}", thin);
+    println!();
     println!("  📦 Name         {}", torrent.name());
     println!(
         "  🧩 Piece Length {}",
@@ -68,12 +72,15 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
         }
     }
 
+    println!();
     println!("  💾 Total Size   {}", format_size(torrent.total_size()));
 
     println!();
     println!("  {}", thin);
 
     let hashes = torrent.piece_hashes();
+
+    println!();
     println!("  🔢 Pieces       {}", hashes.len());
 
     if all {
@@ -87,6 +94,8 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
 
     println!();
     println!("  {}", thin);
+
+    println!();
     println!("  💬 Version      {:?}", torrent.version());
 
     if let Some(comment) = torrent.comment() {

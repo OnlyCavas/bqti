@@ -74,50 +74,6 @@ pub async fn link(user_downloads_dir: PathBuf, info_hash_hex: String) -> io::Res
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
 }
 
-// pub fn ensure_upload_dir(user_base: &Path, metadata: &TorrentFile) -> Option<PathBuf> {
-//     let bqti_dir = bqti_data_dir()?;
-//     let internal_base = bqti_dir
-//         .join(UPLOADS_DIRECTORY)
-//         .join(metadata.info_hash().to_string());
-//
-//     fs::DirBuilder::new()
-//         .recursive(true)
-//         .mode(0o700)
-//         .create(&internal_base)
-//         .map_err(|e| warn!("failed to create {}: {e}", internal_base.display()))
-//         .ok()?;
-//
-//     for file in metadata.files() {
-//         let rel_path = file.to_path();
-//
-//         if !user_base.exists() {
-//             return None;
-//         }
-//
-//         let is_single = rel_path.as_os_str().is_empty() || rel_path == Path::new(".");
-//
-//         let target = if is_single {
-//             internal_base.join(user_base.file_name()?)
-//         } else {
-//             internal_base.join(&rel_path)
-//         };
-//
-//         let source: PathBuf = if is_single {
-//             user_base.to_path_buf()
-//         } else {
-//             user_base.join(&rel_path).components().collect()
-//         };
-//
-//         if !target.exists() {
-//             if let Err(_) = fs::hard_link(&source, &target) {
-//                 return None;
-//             }
-//         }
-//     }
-//
-//     Some(internal_base)
-// }
-
 pub fn ensure_upload_dir(user_base: &Path, metadata: &TorrentFile) -> Option<PathBuf> {
     let bqti_dir = bqti_data_dir()?;
 

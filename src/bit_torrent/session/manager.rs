@@ -244,7 +244,15 @@ async fn restore_cache(queue_tx: mpsc::Sender<QueuedTorrent>) {
 
     while let Some(cache_mode) = cache.next() {
         let (mode, torrent) = match cache_mode {
-            CachingMode::Download { metafile } => (SessionMode::Download, metafile),
+            CachingMode::Download {
+                metafile,
+                user_space,
+            } => (
+                SessionMode::Download {
+                    destination_dir: user_space,
+                },
+                metafile,
+            ),
             CachingMode::Seed {
                 user_space,
                 metafile,

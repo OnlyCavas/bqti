@@ -22,6 +22,7 @@ use crate::{
 pub enum Transition {
     Download {
         metafile: Arc<TorrentFile>,
+        dest: PathBuf,
     },
     Seed {
         path: PathBuf,
@@ -60,7 +61,9 @@ impl TorrentSession {
         }
 
         match to {
-            Transition::Download { metafile } => self.transition_downloading(metafile).await,
+            Transition::Download { metafile, dest } => {
+                self.transition_downloading(metafile, dest).await
+            }
             Transition::Seed { path, metafile } => self.transition_seeding(metafile, &path).await,
             Transition::Pause => {
                 self.transition_idle().await;
@@ -77,7 +80,9 @@ impl TorrentSession {
                 };
 
                 match paused_from {
-                    LastState::Downloading => self.transition_downloading(metafile).await,
+                    LastState::Downloading { dest } => {
+                        self.transition_downloading(metafile, dest).await
+                    }
                     LastState::Seeding { path } => self.transition_seeding(metafile, &path).await,
                 }
             }
@@ -91,11 +96,12 @@ impl TorrentSession {
     async fn transition_downloading(
         self: &Arc<Self>,
         metafile: Arc<TorrentFile>,
+        dest: PathBuf,
     ) -> Result<(), TorrentSessionError> {
         let (tx, rx) = mpsc::channel(64);
 
         let token = CancellationToken::new();
-        let resources = StateResources::<Downloading>::download(metafile.clone()).await?;
+        let resources = StateResources::<Downloading>::download(metafile.clone(), &dest).await?;
 
         let path = resources.get_root_path().to_path_buf();
 
@@ -109,6 +115,7 @@ impl TorrentSession {
             token: token.clone(),
             tx,
             path: path.clone().into(),
+            dest,
         })
         .await;
 
@@ -145,7 +152,9 @@ impl TorrentSession {
         let last = {
             let state = self.state.read().await;
             match &*state {
-                TorrentState::Downloading { .. } => Some(LastState::Downloading),
+                TorrentState::Downloading { dest, .. } => {
+                    Some(LastState::Downloading { dest: dest.clone() })
+                }
                 TorrentState::Seeding { path, .. } => {
                     Some(LastState::Seeding { path: path.clone() })
                 }

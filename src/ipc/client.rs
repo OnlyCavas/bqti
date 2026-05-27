@@ -17,6 +17,7 @@ fn get_pwd(link: &str) -> anyhow::Result<String> {
         .join(link)
         .to_string_lossy()
         .into_owned();
+
     Ok(pwd)
 }
 
@@ -129,7 +130,9 @@ async fn handle_download(command: DownloadCommand) -> anyhow::Result<()> {
     match command {
         DownloadCommand::Add { torrent, watch } => {
             let link = resolve_link(&torrent)?;
-            let response = ipc(Request::AddDownload { link }).await?;
+            let user_space = std::env::current_dir()?.to_string_lossy().into();
+
+            let response = ipc(Request::AddDownload { link, user_space }).await?;
 
             let Response::TorrentAdded { info_hash } = response else {
                 return Ok(());

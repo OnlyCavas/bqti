@@ -31,12 +31,13 @@ use crate::{
         state::TorrentState,
         transition::Transition,
     },
+    utils::bqti::link,
 };
 
 const BEP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub enum SessionMode {
-    Download,
+    Download { destination_dir: PathBuf },
     Seed { source_dir: PathBuf },
 }
 
@@ -88,12 +89,13 @@ impl TorrentSession {
                     })
                     .await?;
             }
-            SessionMode::Download => {
+            SessionMode::Download { destination_dir } => {
                 info!("no files found, starting download");
 
                 session
                     .transition(Transition::Download {
                         metafile: metadata.clone(),
+                        dest: destination_dir,
                     })
                     .await?;
             }
@@ -174,7 +176,7 @@ impl TorrentSession {
         cancellation_token: CancellationToken,
     ) -> Result<(), TorrentSessionError> {
         let weak_ptr = Arc::downgrade(self);
-        let user_space = PathBuf::from(user_space);
+        let internal_directory = PathBuf::from(user_space);
 
         tokio::spawn(async move {
             let session = match weak_ptr.upgrade() {
@@ -184,7 +186,7 @@ impl TorrentSession {
 
             let mut state = session.state.write().await;
 
-            let Some(resources) = state.take_downloading() else {
+            let Some((user_directory, resources)) = state.take_downloading() else {
                 return;
             };
 
@@ -276,6 +278,11 @@ impl TorrentSession {
 
             resources.persist_resume(&session).await;
 
+            match link(user_directory, session.metadata.info_hash().to_string()).await {
+                Ok(path) => info!("download ready at {}", path.display()),
+                Err(e) => warn!("could not link download to user directory: {}", e),
+            }
+
             drop(done_tx);
             drop(resources);
 
@@ -291,13 +298,13 @@ impl TorrentSession {
 
             session
                 .send_event(SessionEvent::DownloadCompleted {
-                    resource_path: user_space.to_string_lossy().to_string(),
+                    resource_path: internal_directory.to_string_lossy().to_string(),
                 })
                 .await;
 
             match session
                 .transition(Transition::Seed {
-                    path: user_space,
+                    path: internal_directory,
                     metafile: session.metadata.clone(),
                 })
                 .await
