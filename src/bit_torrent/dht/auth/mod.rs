@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub const TOKEN_EXP_SECONDS: UnixDate = 30 * 60;
-pub const DIFFICULTY: u32 = 16;
+pub const DIFFICULTY: u32 = 24;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
