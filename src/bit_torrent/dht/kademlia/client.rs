@@ -102,10 +102,16 @@ impl Kademlia {
             return Err(RpcError::UnexpectedResponse)?;
         };
 
-        let secret =
-            self.auth
-                .prover()
-                .prove(self.auth.certificate().pub_key(), challange, difficulty)?;
+        let auth = self.auth.clone();
+
+        let secret = tokio::task::spawn_blocking(move || {
+            let pub_key = auth.certificate().pub_key().to_vec();
+            let prover = auth.prover();
+
+            prover.prove(&pub_key, challange, difficulty)
+        })
+        .await
+        .map_err(|_| AuthError::UnAuthorized())??;
 
         Ok(secret)
     }
