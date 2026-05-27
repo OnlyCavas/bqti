@@ -137,7 +137,7 @@ impl Authorizable for Token {
 
     fn verify_pgp(&self, pgp_keys: &HashMap<Hash32Bytes, SignedPublicKey>) -> bool {
         if self.issuer_ca_cert_sig.is_empty() {
-            return true;
+            return false;
         }
 
         let Some(pgp_key) = pgp_keys.get(&self.swarm_id) else {

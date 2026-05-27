@@ -29,6 +29,7 @@ edition.workspace = true
 [features]
 tee = ["dep:bqti-tee"]
 ml_piece_sub = []
+ml_forge_token = []
 
 [dependencies]
 serde.workspace = true
