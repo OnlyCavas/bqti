@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 
 use crate::{
@@ -5,10 +7,12 @@ use crate::{
     certs::{ActiveKeyIdentity, KeyIdentity},
     i2p,
     network::{ConnectionManager, ManagerOptions, Peer, QuicEndpointBuilder},
+    utils,
 };
 
 pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Result<()> {
     let my_self = Peer::new("localhost", &addr)?;
+    utils::certs::ensure_directories().await?;
 
     let ca_root: ActiveKeyIdentity = {
         #[cfg(feature = "tee")]
@@ -24,7 +28,6 @@ pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Res
     };
 
     let leaf_quic = ca_root.leaf("localhost", false)?;
-    let leaf_kademlia = ca_root.leaf("kademlia", false)?;
 
     let endpoint_config: EndpointBuilder = match i2p {
         true => {
@@ -58,7 +61,7 @@ pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Res
 
     let (manager, stream_rx) = ConnectionManager::new(endpoint, ManagerOptions::default())?;
 
-    let bit_torrent = Bqti::new(manager, leaf_kademlia)?;
+    let bit_torrent = Bqti::new(manager, Arc::new(ca_root))?;
     bit_torrent.serve_forever(stream_rx).await?;
 
     Ok(())

@@ -1,9 +1,12 @@
+use std::{collections::HashMap, io::Cursor};
+
+use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::Digest;
 use sha2::Sha256;
 
 use crate::{
-    certs::{ActiveKeyIdentity, Signature, Signer, Verifier},
+    certs::{ActiveKeyIdentity, KeyIdentity, Signature, Signer, Verifier},
     dht::{
         Key,
         auth::{AuthError, Authorizable, Evidence, TOKEN_EXP_SECONDS, TrustLevel},
@@ -14,11 +17,14 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
+    swarm_id: Hash32Bytes,
     peer: Vec<u8>,
     pow: Hash32Bytes,
     issued_at: UnixDate,
     exp_at: UnixDate,
     pub issuer: Vec<u8>,
+    issuer_ca_cert: Vec<u8>,
+    issuer_ca_cert_sig: Vec<u8>,
     trust_level: TrustLevel,
     signature: Option<Signature>,
 }
@@ -36,6 +42,9 @@ impl Token {
             issuer: Vec::with_capacity(pre_allocated_capacity),
             signature: None,
             trust_level: level,
+            swarm_id: [0u8; 32],
+            issuer_ca_cert: Vec::new(),
+            issuer_ca_cert_sig: Vec::new(),
         }
     }
 
@@ -47,6 +56,17 @@ impl Token {
         &self.trust_level
     }
 
+    pub(crate) fn bind_swarm(
+        &mut self,
+        swarm_id: &Hash32Bytes,
+        ca_cert: &ActiveKeyIdentity,
+        ca_cert_sig: &[u8],
+    ) {
+        self.issuer_ca_cert = ca_cert.cert_der().to_vec();
+        self.issuer_ca_cert_sig = ca_cert_sig.to_vec();
+        self.swarm_id = *swarm_id;
+    }
+
     fn calculate_hash(&self, issuer: &[u8]) -> Hash32Bytes {
         let mut hasher = Sha256::new();
 
@@ -54,19 +74,11 @@ impl Token {
         hasher.update(&self.pow);
         hasher.update(&self.exp_at.to_be_bytes());
         hasher.update(&self.issued_at.to_be_bytes());
-
-        let trust_byte: u8 = match &self.trust_level {
-            TrustLevel::Attested(report) => {
-                let report_bytes = serde_bencode::to_bytes(report).unwrap();
-                hasher.update(&report_bytes);
-                0
-            }
-            TrustLevel::Unattested => 1,
-            TrustLevel::Rejected => 2,
-        };
-
-        hasher.update(&[trust_byte]);
-        hasher.update(&issuer);
+        hasher.update(&[self.trust_level as u8]);
+        hasher.update(&self.swarm_id);
+        hasher.update(&self.issuer_ca_cert);
+        hasher.update(&self.issuer_ca_cert_sig);
+        hasher.update(issuer);
 
         hasher.finalize().into()
     }
@@ -118,5 +130,21 @@ impl Authorizable for Token {
         }
 
         fetch_current_timestamp() > self.exp_at
+    }
+
+    fn verify_pgp(&self, pgp_keys: &HashMap<Hash32Bytes, SignedPublicKey>) -> bool {
+        if self.issuer_ca_cert_sig.is_empty() {
+            return true;
+        }
+
+        let Some(pgp_key) = pgp_keys.get(&self.swarm_id) else {
+            return false;
+        };
+
+        let Ok(sig) = DetachedSignature::from_bytes(Cursor::new(&self.issuer_ca_cert_sig)) else {
+            return false;
+        };
+
+        sig.verify(pgp_key, &self.issuer_ca_cert).is_ok()
     }
 }

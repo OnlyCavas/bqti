@@ -73,14 +73,16 @@ pub struct Kademlia {
 impl Kademlia {
     pub fn new(
         rpc_handler: Arc<RpcHandler>,
-        certificate: ActiveKeyIdentity,
+        certificate: Arc<ActiveKeyIdentity>,
     ) -> Result<Arc<Self>, KademliaError> {
+        let auth_manager = AuthManager::new(certificate, "kademlia")?;
+
         let local_addr = rpc_handler.get_local_addr()?;
-        let host = Node::from_socket(Key::new(certificate.pub_key()), local_addr);
+        let host = Node::from_socket(Key::new(auth_manager.pub_key()), local_addr);
         let route_table = RouteTable::new(host.clone());
 
         let dht = Arc::new(Self {
-            auth: AuthManager::new(certificate),
+            auth: auth_manager,
             rpc_handler: rpc_handler,
             route_table: Arc::new(RwLock::new(route_table)),
             store: Arc::new(RwLock::new(DHTStore::new())),

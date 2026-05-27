@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::{
     BQTIError, BitTorrentError,
@@ -10,7 +10,7 @@ use crate::{
     },
     cli::{CertType, Torrent, TorrentVersion},
     load, save,
-    utils::{self},
+    utils::{self, bqti::certs_dir},
 };
 
 fn file_name(args: &CreateArgs) -> Result<&str, BQTIError> {
@@ -154,41 +154,45 @@ fn validate(torrent: PathBuf) -> Result<()> {
 }
 
 pub async fn handle_certs(_kind: CertType, _output: Option<PathBuf>) -> Result<()> {
+    let dir = match _output {
+        Some(ref path) => PathBuf::from(path),
+        None => certs_dir().context("cannot determine certs directory")?,
+    };
+
     #[cfg(feature = "tee")]
     {
-        warn!(
-            "Certificate management is handled by the TEE enclave — this command is unavailable in TEE mode"
-        );
+        use crate::{
+            certs::TeeKeyIdentity,
+            utils::certs::{CertOptions, store_cert},
+        };
+
+        let enclave_identity = TeeKeyIdentity::new()?;
+
+        store_cert(&enclave_identity, &CertOptions::default()).await?;
+        utils::console::print_certs(&_kind, &dir, &enclave_identity, None);
+
         return Ok(());
     }
 
     #[cfg(not(feature = "tee"))]
     {
-        use crate::utils::certs::CertOptions;
-        use anyhow::Context;
-
         use crate::certs::KeyIdentity;
-        use crate::utils::bqti::certs_dir;
+        use crate::utils::certs::CertOptions;
         use crate::utils::certs::store_cert;
-
-        let dir = match _output {
-            Some(ref path) => PathBuf::from(path),
-            None => certs_dir().context("cannot determine certs directory")?,
-        };
 
         let ca_root = utils::certs::make_ca_root().await?;
 
         match _kind {
             CertType::Root => {
-                store_cert(&ca_root, "ca.der", "ca_pk.der", &CertOptions::new(&dir)).await?;
+                store_cert(&ca_root, &CertOptions::new(&dir)).await?;
 
                 utils::console::print_certs(&_kind, &dir, &ca_root, None);
             }
             CertType::Leaf => {
                 let leaf = ca_root.leaf("localhost", true)?;
 
-                store_cert(&ca_root, "ca.der", "ca_pk.der", &CertOptions::new(&dir)).await?;
-                store_cert(&leaf, "quic.der", "quic_pk.der", &CertOptions::new(&dir)).await?;
+                store_cert(&ca_root, &CertOptions::new(&dir)).await?;
+                store_cert(&leaf, &CertOptions::new(&dir)).await?;
 
                 utils::console::print_certs(&_kind, &dir, &ca_root, Some(&leaf));
             }

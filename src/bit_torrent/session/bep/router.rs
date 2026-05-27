@@ -10,9 +10,9 @@ use crate::{
         pex::PexRouter,
         torrent::metainfo::{InfoHash, Metainfo},
     },
-    certs::{ActiveKeyIdentity, PublicKey},
+    certs::{ActiveKeyIdentity, KeyIdentity, PublicKey},
     dht::{
-        ActiveProver, AuthManager, BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht,
+        ActiveProver, BootStrap, Kademlia, KademliaClient, Key, NodeError, TorrentDht, make_prover,
     },
     network::{
         AddressResolver, ConnectionManager, ConnectionManagerError, Message, NetworkEndpoint, Peer,
@@ -60,7 +60,7 @@ const REBOOTSTRAP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct BepRouter {
     host: BepPeer,
-    auth: Arc<AuthManager>,
+    prover: Arc<ActiveProver>,
     connection_manager: Arc<ConnectionManager>,
 
     kademlia_dht: Arc<Kademlia>,
@@ -69,16 +69,19 @@ pub struct BepRouter {
 
 impl BepRouter {
     pub fn new(
-        certificate: ActiveKeyIdentity,
+        certificate: Arc<ActiveKeyIdentity>,
         connection_manager: Arc<ConnectionManager>,
         kademlia_dht: Arc<Kademlia>,
         pex_router: Arc<PexRouter>,
     ) -> Result<Arc<Self>, BepRouterError> {
-        let public_key = certificate.pub_key().to_vec();
+        let bep_certificate = Arc::new(certificate.leaf("bep certificate", false)?);
+        let prover = make_prover(bep_certificate.clone());
+
+        let public_key = bep_certificate.pub_key().to_vec();
         let local_addr = connection_manager.get_local_ip()?;
 
         let router = Self {
-            auth: AuthManager::new(certificate),
+            prover: Arc::new(prover),
             host: BepPeer {
                 id: public_key,
                 addr: local_addr,
@@ -104,7 +107,7 @@ impl BepRouter {
     }
 
     pub fn prover(&self) -> Arc<ActiveProver> {
-        self.auth.prover().clone()
+        self.prover.clone()
     }
 
     async fn dht_bootstrap(

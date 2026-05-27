@@ -13,7 +13,7 @@ use crate::{
         pex::{PexMessage, PexRouter},
         torrent::metainfo::TorrentError,
     },
-    certs::{ActiveKeyIdentity, KeyIdentity},
+    certs::ActiveKeyIdentity,
     dht::{DhtPacket, Kademlia, RpcHandler, TorrentDht},
     ipc::server::{IpcCommandError, IpcServer},
     load,
@@ -180,17 +180,14 @@ impl Torrenting for Bqti {
 impl Bqti {
     pub fn new(
         connection_manager: Arc<ConnectionManager>,
-        certificate: ActiveKeyIdentity,
+        certificate: Arc<ActiveKeyIdentity>,
     ) -> Result<Arc<Self>> {
-        let kad_cert = certificate.leaf("dht certificate", true)?;
-        let bep_cert = certificate.leaf("bep certificate", true)?;
-
         let rpc_handler = Arc::new(RpcHandler::new(connection_manager.clone()));
-        let kademlia = Kademlia::new(rpc_handler.clone(), kad_cert)?;
+        let kademlia = Kademlia::new(rpc_handler.clone(), certificate.clone())?;
 
         let pex_router = PexRouter::new(connection_manager.clone());
         let bep_router = BepRouter::new(
-            bep_cert,
+            certificate,
             connection_manager.clone(),
             kademlia.clone(),
             pex_router.clone(),
