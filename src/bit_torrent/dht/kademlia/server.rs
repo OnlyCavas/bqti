@@ -99,10 +99,12 @@ impl Kademlia {
                 let sender_id = token.sender();
 
                 if !token.verify() || !token.verify_pgp(&pgp_keys) {
+                    warn!(attack = "token_forgery", src = %src, "invalid token rejected");
                     return Err(AuthError::InvalidToken())?;
                 }
 
                 if !ActiveKeyIdentity::verify(sender_id.pub_key(), &token.hash(), &signature) {
+                    warn!(attack = "token_replay", src = %src, "ownership proof failed, possible replay attack");
                     return Err(AuthError::RoguePeer())?;
                 }
 

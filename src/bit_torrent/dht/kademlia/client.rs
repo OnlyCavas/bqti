@@ -23,9 +23,63 @@ const REFRESH_BUCKET_INTERVAL: Duration = Duration::from_millis(50);
 
 const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(30);
 
+#[cfg(feature = "ml_forge_token")]
+impl Kademlia {
+    pub async fn forget_token(&self, bootstrap: &BootStrap) -> Result<Node, KademliaError> {
+        let signed_secret = self.request_challange(bootstrap).await?;
+
+        let host = {
+            let route_table = self.route_table.read().await;
+            route_table.host.clone()
+        };
+
+        let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
+
+        let token = self
+            .auth
+            .issue_token(&host, &signed_secret, BQTI_VERSION)
+            .await?;
+
+        if let Some(conn) = self
+            .rpc_handler
+            .connection_manager
+            .get_connection(&bootstrap.addr)
+            .await
+        {
+            conn.authenticate(ConnectionAuth::UnAuthenticated).await;
+        }
+
+        self.auth.store_token(token).await;
+
+        Ok(bootstrap)
+    }
+}
+
 #[async_trait]
 impl KademliaClient for Kademlia {
     async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
+        #[cfg(feature = "ml_forge_token")]
+        {
+            let bootstrap = self.forget_token(bootstrap).await?;
+
+            info!(
+                attack = "token_forgery",
+                "forged token stored, attempting DHT operations"
+            );
+
+            self.acknowledge(&bootstrap).await;
+
+            let host_id = {
+                let route_table = self.route_table.read().await;
+                route_table.host.id.clone()
+            };
+
+            self.node_lookup(&host_id).await?;
+
+            return Ok(());
+        }
+
+        #[cfg_attr(feature = "ml_forge_token", allow(unreachable_code))]
         let signed_secret = self.request_challange(bootstrap).await?;
 
         info!(
