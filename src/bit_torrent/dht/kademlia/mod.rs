@@ -16,7 +16,7 @@ use crate::{
         rpc::RpcHandler,
         store::{DHTStore, PRUNE_CHECK_DURATION},
     },
-    network::{Connection, ConnectionAuth, ConnectionManagerError},
+    network::{Connection, ConnectionManagerError},
 };
 
 mod client;
@@ -115,6 +115,57 @@ impl Kademlia {
         Ok(dht)
     }
 
+    #[cfg(feature = "ml_replay_token")]
+    async fn authenticate(&self, target: &Node, timeout: Duration) -> Result<(), KademliaError> {
+        warn!(attack = "token_replay", target = %target.addr, "submitting token with forged nonce, skipping RequestHandshake");
+
+        let token = self
+            .auth
+            .best_token()
+            .await
+            .ok_or(AuthError::UnAuthorized())?;
+
+        let nonce: u32 = rand::random();
+
+        let mut token_bytes = token.hash().to_vec();
+        token_bytes.extend_from_slice(&nonce.to_be_bytes());
+
+        let Ok(signature) = self.auth.prover().sign(&token_bytes) else {
+            return Err(KademliaError::AuthError(AuthError::InvalidToken()));
+        };
+
+        let DhtResponse::Pong { receiver_id } = self
+            .rpc_handler
+            .handshake(
+                target,
+                DhtRequest::SubmitHandshake {
+                    token: token.clone(),
+                    signature,
+                },
+                timeout,
+            )
+            .await?
+        else {
+            return Err(KademliaError::AuthError(AuthError::UnAuthorized()));
+        };
+
+        if receiver_id != target.id {
+            return Err(KademliaError::AuthError(AuthError::RoguePeer()));
+        }
+
+        if let Some(connection) = self
+            .rpc_handler
+            .connection_manager
+            .get_connection(&target.addr)
+            .await
+        {
+            connection.set_outbound_authenticated();
+        }
+
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "ml_replay_token"))]
     async fn authenticate(&self, target: &Node, timeout: Duration) -> Result<(), KademliaError> {
         let host_id = {
             let route_table = self.route_table.read().await;
@@ -171,8 +222,7 @@ impl Kademlia {
             .get_connection(&target.addr)
             .await
         {
-            conn.authenticate(ConnectionAuth::Authenticated(token))
-                .await;
+            conn.set_outbound_authenticated();
         }
 
         Ok(())
@@ -191,12 +241,12 @@ impl Kademlia {
             .await;
 
         let needs_auth = match connection.as_ref() {
-            Some(c) => !c.is_authenticated().await,
+            Some(c) => !c.is_outbound_authenticated(),
             None => true,
         };
 
-        if needs_auth {
-            self.authenticate(target, timeout).await?;
+        if needs_auth && self.authenticate(target, timeout).await.is_err() {
+            return Err(KademliaError::AuthError(AuthError::UnAuthorized()));
         }
 
         let request = self.rpc_handler.request(target, request, timeout).await?;

@@ -254,6 +254,11 @@ impl Bqti {
                     let reply = incoming_packet.take_reply();
 
                     join_set.spawn(async move {
+                        let Some(connection) = bqti.connection_manager.get_connection(&incoming_packet.source_addr).await else {
+                            warn!("received dht packet from unknown connection: {}", incoming_packet.source_addr);
+                            return;
+                        };
+
                         match incoming_packet.message {
                             Message::KeepAlive => info!("keep alive"),
                             Message::DHT(payload) => {
@@ -263,17 +268,12 @@ impl Bqti {
                                             return;
                                         };
 
-                                        let Some(connection) = bqti.connection_manager.get_connection(&incoming_packet.source_addr).await else {
-                                            warn!("received dht packet from unknown connection: {}", incoming_packet.source_addr);
-                                            return;
-                                        };
-
                                         let _ = bqti.kademlia.handle_packet(request, incoming_packet.source_addr, connection).await;
                                     },
                                     Err(e) => error!("dht parse error: {}", e),
                                 }
                             },
-                            Message::PEX(payload) => {
+                            Message::PEX(payload)  if connection.is_inbound_authenticated().await  => {
                                 match PexMessage::from_bytes(&payload) {
                                     Ok(pex) => {
                                         let pex_handler = bqti.pex.clone();
@@ -289,14 +289,15 @@ impl Bqti {
                                     Err(e) => error!("pex parse error: {}", e),
                                 }
                             },
-                            Message::Standard(payload) => {
+                            Message::Standard(payload) if connection.is_inbound_authenticated().await  => {
                                 match StandardMessage::from_bytes(&payload) {
                                     Ok(msg) => {
                                         bqti.torrenting_session.dispatch(msg, incoming_packet.source_addr, reply).await;
                                     }
                                     Err(e) => error!("standard message parse error: {}", e),
                                 }
-                            }
+                            },
+                            _ => warn!("unauthenticated peer: {}", incoming_packet.source_addr),
                         }
                     });
 

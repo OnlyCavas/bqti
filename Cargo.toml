@@ -30,6 +30,7 @@ edition.workspace = true
 tee = ["dep:bqti-tee"]
 ml_piece_sub = []
 ml_forge_token = []
+ml_replay_token = []
 
 [dependencies]
 serde.workspace = true
