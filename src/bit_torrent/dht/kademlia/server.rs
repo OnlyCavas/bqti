@@ -12,7 +12,7 @@ use crate::{
         message::{AuthDhtRequest, AuthRpcRequest, DhtRequest, PeerResponse},
         route_table::KBUCKET_MAX,
     },
-    network::{Connection, ConnectionAuth},
+    network::Connection,
     types::Hash32Bytes,
 };
 
@@ -26,12 +26,12 @@ impl KademliaServer for Kademlia {
     ) -> Result<(), KademliaError> {
         match packet {
             DhtPacket::Request { envelop } => {
-                let Some(token) = connection.peer_token().await else {
+                let Some(sender) = connection.inbound_sender().await else {
                     return Err(AuthError::InvalidToken())?;
                 };
 
-                self.auth.check_rate(&token.sender()).await?;
-                self.handle_request(token.sender(), envelop, src).await
+                self.auth.check_rate(&sender).await?;
+                self.handle_request(sender, envelop, src).await
             }
             DhtPacket::HandShake(rpc) => self.handle_handshake(rpc, src, connection).await,
             _ => panic!("shouldn't receive any response packages"),
@@ -90,21 +90,31 @@ impl Kademlia {
                 Ok(())
             }
             DhtRequest::SubmitHandshake { token, signature } => {
+                let sender_id = token.sender();
+
                 let host_id = {
                     let route_table = self.route_table.read().await;
                     route_table.host.id.clone()
                 };
 
+                let challange = self.auth.challange(&sender_id.pub_key(), &src.ip()).await;
+
                 let pgp_keys = self.auth.pgp_keys.read().await;
-                let sender_id = token.sender();
 
                 if !token.verify() || !token.verify_pgp(&pgp_keys) {
                     warn!(attack = "token_forgery", src = %src, "invalid token rejected");
+                    connection.close();
+
                     return Err(AuthError::InvalidToken())?;
                 }
 
-                if !ActiveKeyIdentity::verify(sender_id.pub_key(), &token.hash(), &signature) {
+                let mut token_bytes = token.hash().to_vec();
+                token_bytes.extend_from_slice(&challange.to_be_bytes());
+
+                if !ActiveKeyIdentity::verify(sender_id.pub_key(), &token_bytes, &signature) {
                     warn!(attack = "token_replay", src = %src, "ownership proof failed, possible replay attack");
+                    connection.close();
+
                     return Err(AuthError::RoguePeer())?;
                 }
 
@@ -120,9 +130,7 @@ impl Kademlia {
                     )
                     .await?;
 
-                connection
-                    .authenticate(ConnectionAuth::Authenticated(token))
-                    .await;
+                connection.set_inbound_auth(token).await;
 
                 Ok(())
             }
@@ -333,9 +341,7 @@ impl Kademlia {
             )
             .await?;
 
-        connection
-            .authenticate(ConnectionAuth::Authenticated(token.clone()))
-            .await;
+        connection.set_inbound_auth(token).await;
 
         Ok(())
     }

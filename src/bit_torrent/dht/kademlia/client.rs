@@ -14,7 +14,6 @@ use crate::{
         message::{AuthDhtRequest, DhtRequest},
         route_table::KBUCKET_MAX,
     },
-    network::ConnectionAuth,
     types::BQTI_VERSION,
 };
 
@@ -46,7 +45,7 @@ impl Kademlia {
             .get_connection(&bootstrap.addr)
             .await
         {
-            conn.authenticate(ConnectionAuth::UnAuthenticated).await;
+            conn.set_outbound_authenticated();
         }
 
         self.auth.store_token(token).await;
@@ -216,8 +215,8 @@ impl Kademlia {
             .get_connection(&bootstrap.addr)
             .await
         {
-            conn.authenticate(ConnectionAuth::Authenticated(token.clone()))
-                .await;
+            conn.set_outbound_authenticated();
+            conn.set_inbound_peer(Key::new(&token.issuer)).await;
         }
 
         let boostrap = Node::from_socket(Key::new(&token.issuer), bootstrap.addr);

@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use async_trait::async_trait;
 use quinn::ConnectionError as QuicConnectionError;
@@ -8,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::{
-    dht::Token,
+    dht::{Key, Token},
     network::message::{Message, Packet},
 };
 
@@ -48,17 +54,13 @@ pub trait BidirectionalStream {
     async fn request(&self, request: Message) -> Result<Vec<u8>, ConnectionError>;
 }
 
-pub enum ConnectionAuth {
-    Authenticated(Token),
-    UnAuthenticated,
-}
-
 pub struct Connection {
     pub id: u64,
     connection: quinn::Connection,
     control_stream: Arc<Mutex<Option<quinn::SendStream>>>,
     cancellation_token: CancellationToken,
-    auth: Arc<RwLock<ConnectionAuth>>,
+    inbound_auth: Arc<RwLock<Option<Key>>>,
+    outbound_auth: Arc<AtomicBool>,
 }
 
 impl Connection {
@@ -91,7 +93,8 @@ impl Connection {
             connection: quic,
             cancellation_token,
             control_stream: Arc::new(Mutex::new(Some(control_stream))),
-            auth: Arc::new(tokio::sync::RwLock::new(ConnectionAuth::UnAuthenticated)),
+            inbound_auth: Arc::new(RwLock::new(None)),
+            outbound_auth: Arc::new(AtomicBool::new(false)),
         });
 
         let task_connection = connection.clone();
@@ -116,20 +119,28 @@ impl Connection {
         Ok(connection)
     }
 
-    pub async fn is_authenticated(&self) -> bool {
-        matches!(*self.auth.read().await, ConnectionAuth::Authenticated(_))
+    pub async fn set_inbound_auth(&self, token: Token) {
+        *self.inbound_auth.write().await = Some(token.sender());
     }
 
-    pub async fn peer_token(&self) -> Option<Token> {
-        match &*self.auth.read().await {
-            ConnectionAuth::Authenticated(token) => Some(token.clone()),
-            ConnectionAuth::UnAuthenticated => None,
-        }
+    pub async fn set_inbound_peer(&self, key: Key) {
+        *self.inbound_auth.write().await = Some(key);
     }
 
-    pub async fn authenticate(&self, mode: ConnectionAuth) {
-        let mut connection = self.auth.write().await;
-        *connection = mode;
+    pub async fn inbound_sender(&self) -> Option<Key> {
+        self.inbound_auth.read().await.clone()
+    }
+
+    pub async fn is_inbound_authenticated(&self) -> bool {
+        self.inbound_auth.read().await.is_some()
+    }
+
+    pub fn set_outbound_authenticated(&self) {
+        self.outbound_auth.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_outbound_authenticated(&self) -> bool {
+        self.outbound_auth.load(Ordering::Relaxed)
     }
 
     async fn handle_connection(
