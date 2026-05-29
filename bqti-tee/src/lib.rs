@@ -40,7 +40,7 @@ pub const SANCTUM_DEV_PUBLIC_KEY: [u8; 32] = [
     0x25, 0x64, 0xdd, 0x17, 0xd7, 0xdc, 0x2b, 0x46, 0xcb, 0x50, 0xa8, 0x4a, 0x69, 0x27, 0x0b, 0x4c,
 ];
 
-pub fn verify_keccak_ed25519(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
+fn verify_keccak_ed25519(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
     if signature[63] & 0b1110_0000 != 0 {
         return false;
     }
