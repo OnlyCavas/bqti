@@ -125,11 +125,7 @@ impl AuthManager {
                     TrustLevel::Rejected
                 }
             }
-            None => {
-                warn!(attack = "enclave_forgery", "attestation rejected");
-
-                TrustLevel::Unattested
-            }
+            None => TrustLevel::Unattested,
         };
 
         let mut token = Token::new(sender.id.pub_key(), secret.value, trust_level);
