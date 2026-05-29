@@ -157,6 +157,12 @@ impl Kademlia {
 
         let auth = self.auth.clone();
 
+        info!(
+            "initiating cryptographic PoW verification [target: 0x{}, difficulty: {}]",
+            hex::encode(&auth.certificate().pub_key().to_vec()[0..4]),
+            difficulty
+        );
+
         let secret = tokio::task::spawn_blocking(move || {
             let pub_key = auth.certificate().pub_key().to_vec();
             let prover = auth.prover();
@@ -165,6 +171,11 @@ impl Kademlia {
         })
         .await
         .map_err(|_| AuthError::UnAuthorized())??;
+
+        info!(
+            "successfully solved PoW puzzle | value: 0x{}",
+            hex::encode(secret.value)
+        );
 
         Ok(secret)
     }

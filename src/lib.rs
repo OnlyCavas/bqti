@@ -45,6 +45,8 @@ impl EndpointBuilder {
     }
 
     pub fn dangerous_no_cert_verify(self) -> Self {
+        // warn!("TLS certificate verification disabled — do not use in production");
+
         match self {
             Self::Quic(b) => Self::Quic(b.dangerous_no_cert_verify()),
             Self::I2p(b) => Self::I2p(b.dangerous_no_cert_verify()),

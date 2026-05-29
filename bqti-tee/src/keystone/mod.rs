@@ -1,6 +1,7 @@
 use std::{
     ffi::{CString, c_void},
     fs,
+    sync::Mutex,
 };
 
 use tempfile::TempDir;
@@ -12,6 +13,8 @@ use crate::{
 };
 
 mod ffi;
+
+static ENCLAVE_LOCK: Mutex<()> = Mutex::new(());
 
 include!(concat!(env!("OUT_DIR"), "/enclave_assets.rs"));
 
@@ -98,6 +101,7 @@ impl Tee {
 
 impl TeeExecute for Tee {
     fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult> {
+        let _guard = ENCLAVE_LOCK.lock().unwrap();
         self.enclave_init()?;
 
         let mut out = ffi::PowResult {
@@ -124,6 +128,7 @@ impl TeeExecute for Tee {
 
     fn sign(&self, data: &[u8]) -> Result<[u8; 64]> {
         let mut signature = [0u8; 64];
+        let _guard = ENCLAVE_LOCK.lock().unwrap();
 
         self.enclave_init()?;
 
@@ -131,30 +136,36 @@ impl TeeExecute for Tee {
             ffi::enclave_sign(data.as_ptr() as *const c_void, data.len(), &mut signature)
         };
 
+        self.enclave_drop();
+
         if result != 0 {
             return Err(TeeError::SignatureFailed(result));
         }
 
-        self.enclave_drop();
         return Ok(signature);
     }
 
     fn get_pubkey(&self) -> Result<[u8; 32]> {
         let mut pub_key = [0u8; 32];
+        let _guard = ENCLAVE_LOCK.lock().unwrap();
+
         self.enclave_init()?;
 
         let result = unsafe { ffi::enclave_get_pubkey(&mut pub_key) };
+
+        self.enclave_drop();
 
         if result != 0 {
             return Err(TeeError::PublicKeyFailed(result));
         }
 
-        self.enclave_drop();
         return Ok(pub_key);
     }
 
     fn attest(&self, nonce: &[u8]) -> Result<crate::AttestReport> {
         let mut bytes = [0u8; ATTEST_REPORT_SIZE];
+        let _guard = ENCLAVE_LOCK.lock().unwrap();
+
         self.enclave_init()?;
 
         let result = unsafe {
@@ -165,11 +176,11 @@ impl TeeExecute for Tee {
             )
         };
 
+        self.enclave_drop();
+
         if result != 0 {
             return Err(TeeError::AttestFailed(result));
         }
-
-        self.enclave_drop();
 
         let tee_report = parse_attest_report(&bytes);
 

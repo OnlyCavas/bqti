@@ -6,12 +6,17 @@ fn main() {
 
         println!("testing pow calculation");
 
-        match tee.pow(42, 10) {
+        match tee.pow(42, 12) {
             Ok(r) => {
+                use bqti::certs::{ActiveKeyIdentity, Verifier};
+
                 println!("nonce:   {}", r.nonce);
                 println!("hash:    {}", hex::encode(&r.hash));
                 println!("pub_key: {}", hex::encode(&r.pub_key));
                 println!("sig:     {}", hex::encode(&r.sig));
+
+                let result = ActiveKeyIdentity::verify(&r.pub_key, &r.hash, &r.sig);
+                println!("Verify: {}", result);
             }
             Err(e) => eprintln!("error: {}", e),
         };
@@ -51,7 +56,16 @@ fn main() {
         };
 
         if report.verify(attest_nonce, None) {
+            use bqti_tee::AttestReport;
+
             println!("report valid");
+            println!("enclave hash:");
+
+            match report {
+                AttestReport::Keystone(k_report) => {
+                    println!("{}", hex::encode(k_report.enclave.hash))
+                }
+            }
         } else {
             println!("report invalid");
         }

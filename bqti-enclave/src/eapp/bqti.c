@@ -96,11 +96,16 @@ void pow_calculate(pow_ctx_t* ctx, const uint8_t pub_key[PUBKEY_LENGTH]) {
   uint8_t hash[HASH_LENGTH];
   uint32_t nonce = 0;
 
+  uint32_t challenge_be = __builtin_bswap32(ctx->challenge);
+  uint32_t nonce_be;
+
   for (;;) {
+    nonce_be = __builtin_bswap32(nonce);
+
     sha256_init(&pow_hash_state);
     sha256_process(&pow_hash_state, pub_key, PUBKEY_LENGTH);
-    sha256_process(&pow_hash_state, (const unsigned char *)&ctx->challenge, sizeof(ctx->challenge));
-    sha256_process(&pow_hash_state, (const unsigned char *)&nonce, sizeof(nonce));
+    sha256_process(&pow_hash_state, (const unsigned char *)&challenge_be, sizeof(uint32_t));
+    sha256_process(&pow_hash_state, (const unsigned char *)&nonce_be, sizeof(uint32_t));
     sha256_done(&pow_hash_state, hash);
 
     if (meets_difficulty(hash, ctx->difficulty)) {

@@ -190,6 +190,8 @@ impl BepRouter {
             let mut rebootstrap_interval = tokio::time::interval(REBOOTSTRAP_INTERVAL);
             let mut rebootstrap = false;
 
+            discovery_interval.tick().await;
+
             loop {
                 let router = match weak_router.upgrade() {
                     Some(r) => r,
@@ -528,7 +530,7 @@ impl BepRouter {
             };
 
             if !verify_piece(request.index, &data, &sig, seeder_key.pub_key()) {
-                debug!("piece {} sig verification failed", request.index);
+                warn!("piece {} sig verification failed", request.index);
                 return Ok(None);
             }
 
@@ -562,7 +564,7 @@ impl BepRouter {
 
         let session_bitfield = session.get_bitfield().await;
 
-        debug!(
+        info!(
             "piece {} complete, have {}/{}",
             index,
             session_bitfield.count(),

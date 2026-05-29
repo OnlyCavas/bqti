@@ -293,6 +293,7 @@ impl Kademlia {
         sender: &Node,
     ) -> Result<(), KademliaError> {
         let difficulty = DIFFICULTY;
+
         let challange = self
             .auth
             .challange(&sender.id.pub_key(), &sender.addr.ip())
