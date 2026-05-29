@@ -27,19 +27,16 @@ target_compile_definitions(ltc_sha256 PUBLIC
 target_include_directories(ltc_sha256 PUBLIC
   vendor/libtomcrypt/src/headers)
 
-# monocypher
-add_library(monocypher STATIC
-  vendor/monocypher/monocypher.c
-  vendor/monocypher/monocypher-ed25519.c)
-target_include_directories(monocypher PUBLIC vendor/monocypher)
-target_compile_options(monocypher PRIVATE -ffunction-sections -fdata-sections)
+# tweetnacl
+add_library(tweetnacl STATIC
+  vendor/tweetnacl/tweetnacl.c)
+target_include_directories(tweetnacl PUBLIC vendor/tweetnacl)
 
 # eapp
 add_executable(${eapp_bin} ${eapp_src})
-target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} ${KEYSTONE_LIB_VERIFIER} ltc_sha256 monocypher "-static" "-Wl,--gc-sections")
+target_link_libraries(${eapp_bin} ${KEYSTONE_LIB_EAPP} ${KEYSTONE_LIB_VERIFIER} ltc_sha256 tweetnacl "-static" "-Wl,--gc-sections")
 target_include_directories(${eapp_bin} PUBLIC
   src/shared
-  vendor/monocypher
   ${KEYSTONE_SDK_DIR}/include)
 
 # static lib for Rust FFI

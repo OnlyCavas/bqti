@@ -4,14 +4,13 @@
 #include <string.h>
 #include <stdbool.h>
 
-#include "verifier/ed25519/ed25519.h"
 #include "app/eapp_utils.h"
 #include "app/sealing.h"
 #include "app/syscall.h"
 #include "edge/edge_common.h"
 
 #include "tomcrypt.h"
-#include "monocypher.h"
+#include "tweetnacl.h"
 
 #include "protocol.h"
 
@@ -34,15 +33,29 @@ int sha256_hash(const uint8_t *input, size_t input_len, uint8_t hash[32]) {
   return 0;
 }
 
-static void enclave_init(void) {
-  assert(!g_initialized);
+void crypto_wipe(void *buf, size_t len) {
+  volatile uint8_t *p = (volatile uint8_t *)buf;
+  while (len--) *p++ = 0;
+}
 
+// TweetNaCl requires the host to provide randombytes().
+// We derive deterministically from the Keystone sealing key so the
+// enclave keypair is stable across boots.
+void randombytes(unsigned char *x, unsigned long long xlen) {
   static struct sealing_key sk;
   get_sealing_key(&sk, sizeof(sk), NULL, 0);
 
-  ed25519_create_keypair(g_enclave_pk, g_enclave_sk, sk.key);
-  crypto_wipe(&sk, sizeof(sk));
+  for (unsigned long long i = 0; i < xlen; i++) {
+    x[i] = sk.key[i % SEALING_KEY_SIZE];
+  }
 
+  crypto_wipe(&sk, sizeof(sk));
+}
+
+static void enclave_init(void) {
+  assert(!g_initialized);
+
+  crypto_sign_keypair(g_enclave_pk, g_enclave_sk);
   g_initialized = true;
 }
 
@@ -53,8 +66,13 @@ static void enclave_destroy(void) {
 }
 
 void enclave_sign(const uint8_t *msg, size_t msg_len, uint8_t sig[64]) {
-    assert(g_initialized);
-    ed25519_sign(sig, msg, msg_len, g_enclave_pk, g_enclave_sk);
+  assert(g_initialized);
+
+  uint8_t sm[64 + msg_len];
+  unsigned long long smlen;
+
+  crypto_sign(sm, &smlen, msg, msg_len, g_enclave_sk);
+  memcpy(sig, sm, 64);
 }
 
 const uint8_t *enclave_pubkey(void) {
