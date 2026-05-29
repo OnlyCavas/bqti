@@ -227,14 +227,6 @@ impl ChallangeProof for PoW {
             return false;
         }
 
-        if let None = self.attestation {
-            return ActiveKeyIdentity::verify(pub_key, &self.value, &signature);
-        }
-
-        let (Ok(pk), Ok(sig)) = (pub_key.try_into(), signature.as_slice().try_into()) else {
-            return false;
-        };
-
-        bqti_tee::verify_keccak_ed25519(pk, &self.value, sig)
+        ActiveKeyIdentity::verify(pub_key, &self.value, &signature)
     }
 }
