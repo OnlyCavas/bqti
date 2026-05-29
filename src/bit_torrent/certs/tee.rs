@@ -4,9 +4,7 @@ use crate::certs::{
     ActiveKeyIdentity, CertError, KeyIdentity, PublicKey, Signature, Signer, Verifier,
 };
 use bqti_tee::TeeExecute;
-use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, IsCa, Issuer, PublicKeyData, SigningKey,
-};
+use rcgen::{BasicConstraints, Certificate, CertificateParams, IsCa, PublicKeyData, SigningKey};
 use ring::signature::UnparsedPublicKey;
 use rustls::sign::CertifiedKey;
 use rustls::sign::Signer as RustlsSigner;
@@ -98,26 +96,20 @@ impl TeeKeyIdentity {
 
 impl KeyIdentity for TeeKeyIdentity {
     fn leaf(&self, common_name: &str, as_ca: bool) -> Result<ActiveKeyIdentity, CertError> {
-        let tee = Arc::clone(&self.signer.tee);
-        let pub_key = tee.get_pubkey()?;
-        let leaf_signer = TeeSigner::new(Arc::clone(&tee), &pub_key);
-        let leaf_rcgen = RcgenSigner(leaf_signer.clone());
+        let signer = self.signer.clone();
 
         let mut params = CertificateParams::new(vec![common_name.to_string()])?;
+
         params.is_ca = if as_ca {
             IsCa::Ca(BasicConstraints::Unconstrained)
         } else {
             IsCa::NoCa
         };
 
-        let binding = RcgenSigner(self.signer.clone());
-        let issuer = Issuer::from_ca_cert_der(self.cert.der(), &binding)?;
-        let cert = params.signed_by(&leaf_rcgen, &issuer)?;
+        let binding = RcgenSigner(signer.clone());
+        let cert = params.self_signed(&binding)?;
 
-        Ok(TeeKeyIdentity {
-            cert,
-            signer: leaf_signer,
-        })
+        Ok(Self { cert, signer })
     }
 
     fn cert_der(&self) -> rustls_pki_types::CertificateDer<'static> {

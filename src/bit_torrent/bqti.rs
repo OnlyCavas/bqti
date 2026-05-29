@@ -273,7 +273,8 @@ impl Bqti {
                                     Err(e) => error!("dht parse error: {}", e),
                                 }
                             },
-                            Message::PEX(payload)  if connection.is_inbound_authenticated().await  => {
+                            Message::PEX(payload)  if connection.is_inbound_authenticated().await
+                                || connection.is_outbound_authenticated()  => {
                                 match PexMessage::from_bytes(&payload) {
                                     Ok(pex) => {
                                         let pex_handler = bqti.pex.clone();
@@ -289,7 +290,8 @@ impl Bqti {
                                     Err(e) => error!("pex parse error: {}", e),
                                 }
                             },
-                            Message::Standard(payload) if connection.is_inbound_authenticated().await  => {
+                            Message::Standard(payload) if connection.is_inbound_authenticated().await
+                                || connection.is_outbound_authenticated()  => {
                                 match StandardMessage::from_bytes(&payload) {
                                     Ok(msg) => {
                                         bqti.torrenting_session.dispatch(msg, incoming_packet.source_addr, reply).await;

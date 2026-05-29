@@ -174,11 +174,17 @@ pub fn preallocate(file: &File, length: u64) -> io::Result<()> {
         use std::os::unix::io::AsRawFd;
         let ret = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, length as libc::off_t) };
 
-        if ret != 0 {
-            return Err(io::Error::last_os_error());
+        if ret == 0 {
+            return Ok(());
         }
 
-        Ok(())
+        let err = io::Error::last_os_error();
+
+        if err.raw_os_error() == Some(libc::EOPNOTSUPP) {
+            return file.set_len(length);
+        }
+
+        return Err(err);
     }
 
     #[cfg(target_os = "macos")]

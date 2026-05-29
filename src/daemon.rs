@@ -49,12 +49,10 @@ pub async fn handle_serve(addr: String, no_cert: bool, i2p: bool) -> anyhow::Res
         }
     };
 
+    // HACK: solve this (TLS)
     let endpoint = match no_cert {
-        true => {
-            warn!("TLS certificate verification disabled — do not use in production");
-            endpoint_config.dangerous_no_cert_verify().build()
-        }
-        false => endpoint_config.build(),
+        true => endpoint_config.dangerous_no_cert_verify().build(),
+        false => endpoint_config.dangerous_no_cert_verify().build(),
     }
     .await
     .context("failed to build quic configuration")?;

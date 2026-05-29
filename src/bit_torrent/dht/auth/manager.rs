@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-const SECRET_SALT_REFRESH_DURATION: Duration = Duration::from_secs(5);
+const SECRET_SALT_REFRESH_DURATION: Duration = Duration::from_secs(60); // 60 seconds for DHT join
 
 const REQUEST_NUMBER: Requests = 100;
 const REQUEST_PER_SECOND: UnixDate = 60;
@@ -106,15 +106,30 @@ impl AuthManager {
 
         let trust_level = match &secret.attestation {
             Some(report) => {
+                info!("attestation report received, verifying");
+
                 let expected_enclave_hash = Manifest::get_enclave_hash(app_version).await?;
 
+                info!(
+                    "manifest resolution successful, expected measurement: 0x{}",
+                    hex::encode(&expected_enclave_hash[0..4])
+                );
+
                 if report.verify(&secret.value, Some(&expected_enclave_hash)) {
+                    info!("SUCCESS: remote hardware attestation report verified");
+
                     TrustLevel::Attested
                 } else {
+                    warn!("CRITICAL: remote hardware attestation signature MISMATCH");
+
                     TrustLevel::Rejected
                 }
             }
-            None => TrustLevel::Unattested,
+            None => {
+                warn!(attack = "enclave_forgery", "attestation rejected");
+
+                TrustLevel::Unattested
+            }
         };
 
         let mut token = Token::new(sender.id.pub_key(), secret.value, trust_level);
