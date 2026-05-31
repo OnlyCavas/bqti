@@ -79,13 +79,8 @@ impl RpcHandler {
                     return None;
                 };
 
-                if let Err(error) = response_tx.send(response.payload) {
-                    match error {
-                        DhtResponse::Value { .. } => {
-                            debug!("in-flight value response after early exit")
-                        }
-                        other => error!("failed to send rpc response: {:?}", other),
-                    }
+                if let Err(_) = response_tx.send(response.payload) {
+                    debug!("in-flight value response after early exit")
                 }
 
                 None

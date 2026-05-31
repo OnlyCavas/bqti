@@ -22,8 +22,8 @@ const REFRESH_BUCKET_INTERVAL: Duration = Duration::from_millis(50);
 
 const TIMEOUT_EXCEPTION: Duration = Duration::from_secs(30);
 
-#[cfg(feature = "ml_forge_token")]
 impl Kademlia {
+    #[cfg(feature = "ml_forge_token")]
     pub async fn forget_token(&self, bootstrap: &BootStrap) -> Result<Node, KademliaError> {
         let signed_secret = self.request_challange(bootstrap).await?;
 
@@ -52,43 +52,55 @@ impl Kademlia {
 
         Ok(bootstrap)
     }
+
+    #[cfg_attr(feature = "ml_forge_token", allow(unused))]
+    async fn join_with_retry(&self, bootstrap: &BootStrap) -> Result<Node, KademliaError> {
+        const MAX_RETRIES: u32 = 2;
+
+        for attempt in 0..MAX_RETRIES {
+            let signed_secret = self.request_challange(bootstrap).await?;
+
+            info!(
+                "attempting to join network on bootstrap {} (attempt {})",
+                bootstrap.node().addr,
+                attempt + 1
+            );
+
+            match self.submit_challange(bootstrap, &signed_secret).await {
+                Ok(node) => {
+                    info!("bootstrapped");
+                    return Ok(node);
+                }
+                Err(KademliaError::AuthError(AuthError::RoguePeer()))
+                    if attempt + 1 < MAX_RETRIES =>
+                {
+                    debug!("challenge rejected, likely salt rotation, retrying");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(KademliaError::BootstrapFailed())
+    }
 }
 
 #[async_trait]
 impl KademliaClient for Kademlia {
     async fn join_network(&self, bootstrap: &BootStrap) -> Result<(), KademliaError> {
         #[cfg(feature = "ml_forge_token")]
-        {
-            let bootstrap = self.forget_token(bootstrap).await?;
+        let bootstrap = {
+            let node = self.forget_token(bootstrap).await?;
 
             info!(
                 attack = "token_forgery",
                 "forged token stored, attempting DHT operations"
             );
 
-            self.acknowledge(&bootstrap).await;
+            node
+        };
 
-            let host_id = {
-                let route_table = self.route_table.read().await;
-                route_table.host.id.clone()
-            };
-
-            self.node_lookup(&host_id).await?;
-
-            return Ok(());
-        }
-
-        #[cfg_attr(feature = "ml_forge_token", allow(unreachable_code))]
-        let signed_secret = self.request_challange(bootstrap).await?;
-
-        info!(
-            "attempting to join network on bootstrap {}",
-            bootstrap.node().addr
-        );
-
-        let bootstrap = self.submit_challange(bootstrap, &signed_secret).await?;
-
-        info!("bootstrapped");
+        #[cfg(not(feature = "ml_forge_token"))]
+        let bootstrap = self.join_with_retry(bootstrap).await?;
 
         self.acknowledge(&bootstrap).await;
 
