@@ -17,6 +17,10 @@ pub struct SoftwareKeyIdentity {
 }
 
 impl SoftwareKeyIdentity {
+    pub fn new() -> Result<Self, CertError> {
+        SoftwareKeyIdentity::root("software-certificate")
+    }
+
     pub fn from_bytes_der(cert_bytes: &[u8], priv_key_bytes: &[u8]) -> Result<Self, CertError> {
         let priv_key_der = PrivateKeyDer::Pkcs8(priv_key_bytes.to_vec().into());
         let key_pair = KeyPair::from_der_and_sign_algo(&priv_key_der, DEFAULT_SIGN_ALGORITM)?;
