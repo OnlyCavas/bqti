@@ -152,6 +152,7 @@ impl RpcHandler {
 
         let connect_and_send = {
             self.connection_manager.connect(&peer).await?;
+
             self.connection_manager
                 .send(&peer, Message::try_from(packet)?)
                 .await
