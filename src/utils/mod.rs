@@ -29,10 +29,22 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
         println!("");
     }
 
+    if let Some(dht_nodes) = torrent.dht_nodes() {
+        println!("  📡 BootStrap nodes");
+
+        for bootstrap in dht_nodes {
+            println!("       ↳ {}", bootstrap.to_string());
+        }
+
+        println!("");
+    }
+
     if let Some(announce_list) = torrent.announce_list() {
         println!("  📡 Trackers");
+
         for (i, tier) in announce_list.iter().enumerate() {
             println!("     Tier {}", i + 1);
+
             for tracker in tier {
                 println!("       ↳ {}", tracker);
             }
@@ -41,6 +53,7 @@ pub fn print_torrent(torrent: &impl Metainfo, all: bool) {
 
     if let Some(web_seeds) = torrent.web_seeds() {
         println!("  🌐 Web Seeds");
+
         for url in web_seeds {
             println!("       ↳ {}", url);
         }

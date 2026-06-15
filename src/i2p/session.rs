@@ -43,7 +43,11 @@ pub struct SamSession {
 
 impl SamSession {
     pub async fn new(session_id: &str) -> Result<Self> {
-        Self::from_addr(session_id, &SAM_TCP_ADDR).await
+        Self::from_addr(
+            session_id,
+            &std::env::var("SAM").unwrap_or_else(|_| SAM_TCP_ADDR.to_string()),
+        )
+        .await
     }
 
     async fn from_addr(session_id: &str, sam_addr: &str) -> Result<Self> {
