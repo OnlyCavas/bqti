@@ -1,6 +1,4 @@
-use std::ops::Neg;
-
-use curve25519_dalek::{Scalar, constants::ED25519_BASEPOINT_TABLE, edwards::CompressedEdwardsY};
+use ed25519_dalek::{Signature, VerifyingKey, hazmat::raw_verify};
 use serde_big_array::BigArray;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,33 +39,12 @@ pub const SANCTUM_DEV_PUBLIC_KEY: [u8; 32] = [
 ];
 
 fn verify_keccak_ed25519(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-    if signature[63] & 0b1110_0000 != 0 {
+    let Ok(pub_key) = VerifyingKey::from_bytes(public_key) else {
         return false;
-    }
-
-    let a = match CompressedEdwardsY(*public_key).decompress() {
-        Some(p) => p.neg(),
-        None => return false,
     };
 
-    let mut h = Sha3_512::new();
-    h.update(&signature[..32]);
-    h.update(public_key);
-    h.update(message);
-    let h_bytes: [u8; 64] = h.finalize().into();
-
-    let k = Scalar::from_bytes_mod_order_wide(&h_bytes);
-
-    let s_bytes: [u8; 32] = signature[32..].try_into().unwrap();
-    let s = match Scalar::from_canonical_bytes(s_bytes).into_option() {
-        Some(s) => s,
-        None => return false,
-    };
-
-    let r_computed = (ED25519_BASEPOINT_TABLE * &s) + (&a * &k);
-
-    let r_expected = CompressedEdwardsY(signature[..32].try_into().unwrap());
-    r_computed.compress() == r_expected
+    let sig = Signature::from_bytes(signature);
+    raw_verify::<Sha3_512>(&pub_key, message, &sig).is_ok()
 }
 
 impl KeystoneAttestReport {
@@ -129,7 +106,7 @@ mod keystone;
 #[cfg(feature = "tee")]
 pub use keystone::*;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_512};
+use sha3::Sha3_512;
 
 pub fn tee_available() -> bool {
     #[cfg(feature = "tee")]
