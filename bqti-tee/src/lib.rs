@@ -48,12 +48,7 @@ fn verify_keccak_ed25519(public_key: &[u8; 32], message: &[u8], signature: &[u8;
 }
 
 impl KeystoneAttestReport {
-    pub fn verify(
-        &self,
-        nonce: &[u8],
-        expected_hash: Option<&[u8]>,
-        trusted_dev_key: &[u8; 32],
-    ) -> bool {
+    pub fn verify(&self, nonce: &[u8], expected_hash: &[u8], trusted_dev_key: &[u8; 32]) -> bool {
         if trusted_dev_key != &self.dev_public_key {
             return false;
         }
@@ -75,10 +70,8 @@ impl KeystoneAttestReport {
             return false;
         }
 
-        if let Some(expected) = expected_hash {
-            if self.enclave.hash.as_ref() != expected {
-                return false;
-            }
+        if self.enclave.hash.as_ref() != expected_hash {
+            return false;
         }
 
         let nonce_len = nonce.len().min(data_len);
@@ -93,7 +86,7 @@ pub enum AttestReport {
 }
 
 impl AttestReport {
-    pub fn verify(&self, nonce: &[u8], expected_hash: Option<&[u8]>) -> bool {
+    pub fn verify(&self, nonce: &[u8], expected_hash: &[u8]) -> bool {
         match self {
             AttestReport::Keystone(r) => r.verify(nonce, expected_hash, &SANCTUM_DEV_PUBLIC_KEY),
         }

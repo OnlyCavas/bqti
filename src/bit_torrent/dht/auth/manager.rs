@@ -115,7 +115,7 @@ impl AuthManager {
                     hex::encode(&expected_enclave_hash[0..4])
                 );
 
-                if report.verify(&secret.value, Some(&expected_enclave_hash)) {
+                if report.verify(&secret.value, &expected_enclave_hash) {
                     info!("SUCCESS: remote hardware attestation report verified");
 
                     TrustLevel::Attested
