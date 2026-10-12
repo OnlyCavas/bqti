@@ -1,0 +1,4 @@
+[submodule "vendor/keystone"]
+	path = vendor/keystone
+	url = https://github.com/keystone-enclave/keystone.git
+	ignore = all

@@ -100,7 +100,7 @@ impl Tee {
 }
 
 impl TeeExecute for Tee {
-    fn pow(&self, challenge: u32, difficulty: u32) -> Result<PowResult> {
+    fn pow(&self, challange: u32, difficulty: u32) -> Result<PowResult> {
         let _guard = ENCLAVE_LOCK.lock().unwrap();
         self.enclave_init()?;
 
@@ -111,7 +111,7 @@ impl TeeExecute for Tee {
             pub_key: [0u8; 32],
         };
 
-        let pow_result = unsafe { ffi::enclave_run_pow(challenge, difficulty, &mut out) };
+        let pow_result = unsafe { ffi::enclave_run_pow(challange, difficulty, &mut out) };
         self.enclave_drop();
 
         if pow_result != 0 {
