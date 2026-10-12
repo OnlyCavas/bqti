@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-const SECRET_SALT_REFRESH_DURATION: Duration = Duration::from_secs(60); // 60 seconds for DHT join
+const SECRET_SALT_REFRESH_DURATION: Duration = Duration::from_secs(360); // before 60 seconds for DHT join
 
 const REQUEST_NUMBER: Requests = 100;
 const REQUEST_PER_SECOND: UnixDate = 60;
